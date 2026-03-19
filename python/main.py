@@ -53,6 +53,9 @@ def handle_command(command: str, payload: dict) -> dict:
     elif command == 'check_hwp':
         return _get_hwp_writer().check_connection()
 
+    elif command == 'connect_hwp':
+        return _get_hwp_writer().connect()
+
     elif command == 'check_cursor':
         return _get_hwp_writer().check_cursor_position()
 

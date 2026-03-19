@@ -57,16 +57,34 @@ class HwpWriter(BaseWriter):
         hwp_per_mm = 7200 / 25.4
         fallback = int(150 * hwp_per_mm)
         try:
-            hwp.HAction.GetDefault("PageSetup", hwp.HParameterSet.HSecDef.HSet)
-            page_def = hwp.HParameterSet.HSecDef.PageDef
-            paper_w = page_def.PaperWidth
-            left_m = page_def.LeftMargin
-            right_m = page_def.RightMargin
-            gutter = page_def.GutterMirror if hasattr(page_def, 'GutterMirror') else 0
-            body_w = paper_w - left_m - right_m - gutter
+            act = hwp.CreateAction("PageSetup")
+            pset = act.CreateSet()
+            act.GetDefault(pset)
+            pd = pset.Item("PageDef")
+            paper_w = pd.Item("PaperWidth")
+            left_m = pd.Item("LeftMargin")
+            right_m = pd.Item("RightMargin")
+            body_w = paper_w - left_m - right_m
             return body_w if body_w > 0 else fallback
         except Exception:
             return fallback
+
+    def _get_column_width(self, hwp) -> int:
+        """현재 커서 위치의 단(column) 너비(HWPUNIT) 반환. 1단이면 본문 너비와 동일."""
+        body_w = self._get_body_width(hwp)
+        try:
+            act = hwp.CreateAction("MultiColumn")
+            pset = act.CreateSet()
+            act.GetDefault(pset)
+            col_count = pset.Item("Count")
+            if col_count and col_count > 1:
+                same_gap = pset.Item("SameGap") or 0
+                total_gap = same_gap * (col_count - 1)
+                col_w = (body_w - total_gap) // col_count
+                return col_w if col_w > 0 else body_w
+        except Exception:
+            pass
+        return body_w
 
     def _get_hwp(self):
         """한글 프로그램에 연결 — 실행 중이면 연결, 없으면 자동 실행 + write-time 설정"""
@@ -113,6 +131,66 @@ class HwpWriter(BaseWriter):
 
     # 미연결 시 통일 메시지
     _DISCONNECTED_MSG = "한글 프로그램에 연결할 수 없습니다. 한글을 먼저 실행해주세요."
+
+    def connect(self) -> dict:
+        """사용자가 수동으로 한글 연결 — ROT 모니커로 기존 인스턴스에 연결"""
+        try:
+            import win32com.client
+            import pythoncom
+
+            # 기존 연결 초기화
+            self._hwp = None
+            self._hwp_setup_done = False
+
+            hwp = None
+
+            # 1차: GetActiveObject
+            try:
+                hwp = win32com.client.GetActiveObject("HWPFrame.HwpObject.1")
+                sys.stderr.write("[hwp-writer] connect: GetActiveObject 성공\n")
+            except Exception:
+                pass
+
+            # 2차: ROT 모니커에서 기존 HWP 인스턴스 검색
+            if hwp is None:
+                try:
+                    rot = pythoncom.GetRunningObjectTable(0)
+                    ctx = pythoncom.CreateBindCtx(0)
+                    for moniker in rot.EnumRunning():
+                        try:
+                            name = moniker.GetDisplayName(ctx, None)
+                            if 'HwpObject' in name:
+                                obj = rot.GetObject(moniker)
+                                hwp = win32com.client.Dispatch(
+                                    obj.QueryInterface(pythoncom.IID_IDispatch)
+                                )
+                                sys.stderr.write(f"[hwp-writer] connect: ROT '{name}' 연결 성공\n")
+                                break
+                        except Exception:
+                            continue
+                except Exception as e:
+                    sys.stderr.write(f"[hwp-writer] connect: ROT 검색 실패: {e}\n")
+
+            if hwp is None:
+                return {"connected": False, "error": self._DISCONNECTED_MSG}
+
+            # 보안 모듈 등록
+            try:
+                hwp.RegisterModule("FilePathCheckDLL", "FilePathCheckerModule")
+            except Exception:
+                pass
+
+            doc_count = hwp.XHwpDocuments.Count
+            sys.stderr.write(f"[hwp-writer] connect: 문서 {doc_count}개\n")
+
+            self._hwp = hwp
+            self._hwp_setup_done = True
+            return {"connected": True, "error": None}
+        except Exception as e:
+            sys.stderr.write(f"[hwp-writer] connect failed: {e}\n")
+            self._hwp = None
+            self._hwp_setup_done = False
+            return {"connected": False, "error": self._DISCONNECTED_MSG}
 
     def check_connection(self) -> dict:
         """연결 확인 — passive probe. _hwp를 캐시하지만 write-time 설정은 안 함."""
@@ -467,9 +545,7 @@ class HwpWriter(BaseWriter):
         hwp.HAction.Execute("CellBorderFill", hwp.HParameterSet.HCellBorderFill.HSet)
 
     def _write_image(self, hwp, image: ImageData):
-        """이미지 삽입 — base64 → 임시 파일 → InsertFile
-
-        HWP COM에는 HInsertPicture가 없으므로 InsertFile 액션으로 이미지 삽입.
+        """이미지 삽입 — base64 → 본문 너비에 맞춰 리사이즈 → 임시 파일 → InsertFile
 
         Raises:
             Exception: base64 디코딩 실패 또는 COM InsertFile 실패 시
@@ -477,27 +553,19 @@ class HwpWriter(BaseWriter):
         import base64
         import tempfile
         import os
+        import io
+        from PIL import Image
 
-        # 확장자 결정
-        ext_map = {
-            'image/png': '.png',
-            'image/jpeg': '.jpg',
-            'image/gif': '.gif',
-            'image/bmp': '.bmp',
-        }
-        ext = ext_map.get(image.mime_type, '.png')
+        # base64 → 임시 PNG 파일
+        img_bytes = base64.b64decode(image.base64)
 
-        # base64 → 임시 파일
         tmp_path = None
         try:
-            img_bytes = base64.b64decode(image.base64)
-            fd, tmp_path = tempfile.mkstemp(suffix=ext, prefix='auza_img_')
+            fd, tmp_path = tempfile.mkstemp(suffix='.png', prefix='auza_img_')
             os.write(fd, img_bytes)
             os.close(fd)
 
-            sys.stderr.write(f"[hwp-writer] InsertFile(image): {tmp_path} ({len(img_bytes)} bytes)\n")
-
-            # InsertFile COM 호출 — 이미지 파일을 문서에 삽입
+            # 1단계: InsertFile로 이미지 삽입
             hwp.HAction.GetDefault("InsertFile", hwp.HParameterSet.HInsertFile.HSet)
             hwp.HParameterSet.HInsertFile.filename = tmp_path
             hwp.HParameterSet.HInsertFile.KeepSection = 0
@@ -506,8 +574,40 @@ class HwpWriter(BaseWriter):
             if not result:
                 raise RuntimeError(f"InsertFile(image) COM 호출 실패: {tmp_path}")
 
+            # 2단계: 삽입된 이미지를 단 너비에 맞춰 리사이즈
+            import time
+            time.sleep(0.2)
+            target_w = self._get_column_width(hwp)
+
+            try:
+                hwp.HAction.Run("MoveLeft")
+                hwp.HAction.Run("SelectCtrlFront")
+                time.sleep(0.1)
+                ctrl = hwp.CurSelectedCtrl
+                if ctrl:
+                    props = ctrl.Properties
+                    cur_w = props.Item("Width")
+                    cur_h = props.Item("Height")
+                    if cur_w > 0 and cur_w > target_w:
+                        ratio = target_w / cur_w
+                        new_h = int(cur_h * ratio)
+                        props.SetItem("Width", target_w)
+                        props.SetItem("Height", new_h)
+                        ctrl.Properties = props
+                        sys.stderr.write(f"[hwp-writer] image resized: "
+                                         f"{cur_w}x{cur_h} → {target_w}x{new_h} HWPUNIT "
+                                         f"({target_w*25.4/7200:.0f}x{new_h*25.4/7200:.0f}mm)\n")
+                    hwp.HAction.Run("Cancel")
+                    # 이미지 뒤로 커서 이동
+                    hwp.HAction.Run("MoveRight")
+            except Exception as e:
+                sys.stderr.write(f"[hwp-writer] image resize failed: {e}\n")
+                try:
+                    hwp.HAction.Run("Cancel")
+                except Exception:
+                    pass
+
         finally:
-            # 임시 파일 정리
             if tmp_path:
                 try:
                     os.unlink(tmp_path)

@@ -19,6 +19,7 @@ export interface ElectronAPI {
   geminiChat: (payload: { messages: Array<{ role: string; text: string }>; context?: string }) => Promise<{ text: string | null; error: string | null }>
 
   // HWP 연동
+  connectHwp: () => Promise<{ connected: boolean; error: string | null }>
   checkHwp: () => Promise<{ connected: boolean; error: string | null }>
   checkHwpCursor: () => Promise<{ at_end: boolean; error: string | null }>
   writeHwp: (payload: HwpWritePayload) => Promise<HwpWriteResult>

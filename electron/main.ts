@@ -234,6 +234,15 @@ app.whenReady().then(() => {
   startPythonProcess()
 })
 
+// IPC: HWP 수동 연결 (사용자 트리거)
+ipcMain.handle('hwp:connect', async () => {
+  const result = await sendPythonCommand('connect_hwp')
+  if (!result.success || !result.data) {
+    return { connected: false, error: result.error || 'Python 백엔드에 연결할 수 없습니다.' }
+  }
+  return result.data as { connected: boolean; error: string | null }
+})
+
 // IPC: HWP 연결 확인
 ipcMain.handle('hwp:check', async () => {
   const result = await sendPythonCommand('check_hwp')

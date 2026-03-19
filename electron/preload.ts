@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('gemini:chat', payload) as Promise<{ text: string | null; error: string | null }>,
 
   // HWP 연동
+  connectHwp: () =>
+    ipcRenderer.invoke('hwp:connect') as Promise<{ connected: boolean; error: string | null }>,
   checkHwp: () =>
     ipcRenderer.invoke('hwp:check') as Promise<{ connected: boolean; error: string | null }>,
   checkHwpCursor: () =>
