@@ -104,7 +104,7 @@ def call_gemini_vision(api_key: str, image_base64: str, prompt: str) -> str:
     import google.generativeai as genai
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-3.1-pro-preview")
 
     # google-generativeai SDK: inline_data 형식으로 base64 이미지 전달
     response = model.generate_content([

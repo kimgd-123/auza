@@ -130,7 +130,7 @@ ipcMain.handle('gemini:vision', async (_event, imageBase64: string, prompt: stri
     }
 
     const genAI = new GoogleGenerativeAI(apiKey)
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
+    const model = genAI.getGenerativeModel({ model: 'gemini-3.1-pro-preview' })
 
     const result = await model.generateContent([
       {
@@ -168,7 +168,7 @@ ipcMain.handle(
       }
 
       const genAI = new GoogleGenerativeAI(apiKey)
-      const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
+      const model = genAI.getGenerativeModel({ model: 'gemini-3.1-pro-preview' })
 
       // 시스템 프롬프트 + 컨텍스트 구성
       const systemParts: string[] = [
