@@ -93,6 +93,66 @@ def extract_page_images(pdf_path: str, page_num: int) -> list:
     return images
 
 
+def render_page_region(pdf_path: str, page_num: int, bbox_norm: list, dpi: int = 300) -> Optional[str]:
+    """PDF 페이지의 특정 영역을 고해상도로 렌더링 (벡터/래스터 모두 지원)
+
+    Args:
+        pdf_path: PDF 파일 경로
+        page_num: 0-based 페이지 번호
+        bbox_norm: 정규화 좌표 [x1,y1,x2,y2] (0.0~1.0)
+        dpi: 렌더링 해상도
+
+    Returns:
+        base64 PNG 또는 None
+    """
+    import fitz
+
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception as e:
+        sys.stderr.write(f"[pdf-img] render: PDF 열기 실패: {e}\n")
+        return None
+
+    if page_num < 0 or page_num >= len(doc):
+        doc.close()
+        return None
+
+    page = doc[page_num]
+    page_w, page_h = page.rect.width, page.rect.height
+
+    # 정규화 좌표 → 페이지 포인트 좌표
+    x1 = bbox_norm[0] * page_w
+    y1 = bbox_norm[1] * page_h
+    x2 = bbox_norm[2] * page_w
+    y2 = bbox_norm[3] * page_h
+
+    # 패딩 추가
+    padding = 3  # pt
+    x1 = max(0, x1 - padding)
+    y1 = max(0, y1 - padding)
+    x2 = min(page_w, x2 + padding)
+    y2 = min(page_h, y2 + padding)
+
+    clip = fitz.Rect(x1, y1, x2, y2)
+    mat = fitz.Matrix(dpi / 72, dpi / 72)
+
+    try:
+        from PIL import Image
+        pix = page.get_pixmap(matrix=mat, clip=clip)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        img_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+        sys.stderr.write(f"[pdf-img] render: {pix.width}x{pix.height}px at {dpi}DPI\n")
+        doc.close()
+        return img_b64
+    except Exception as e:
+        sys.stderr.write(f"[pdf-img] render failed: {e}\n")
+        doc.close()
+        return None
+
+
 def find_matching_pdf_image(
     pdf_images: list,
     figure_box_norm: list,

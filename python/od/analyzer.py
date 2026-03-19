@@ -41,15 +41,6 @@ def analyze_capture(image_base64: str, api_key: str, od_model,
         html = call_gemini_vision(api_key, image_base64, PROMPT_TEXT)
         return {"html": html, "regions": 0, "error": None}
 
-    # PDF 내장 이미지 사전 추출 (figure 대체용)
-    pdf_images = []
-    if pdf_path and page_num >= 0:
-        try:
-            from .pdf_image_extractor import extract_page_images
-            pdf_images = extract_page_images(pdf_path, page_num)
-        except Exception as e:
-            sys.stderr.write(f"[od-analyzer] PDF 이미지 추출 실패: {e}\n")
-
     # OD 감지
     detections = detect_regions_from_image(od_model, image_bytes)
 
@@ -82,7 +73,7 @@ def analyze_capture(image_base64: str, api_key: str, od_model,
 
         if region == "figure":
             img_b64 = _get_figure_image(
-                img, box, pdf_images, capture_bbox_norm, img_w, img_h
+                img, box, pdf_path, page_num, capture_bbox_norm, img_w, img_h
             )
             html_parts.append(
                 f'<img src="data:image/png;base64,{img_b64}" '
@@ -110,17 +101,17 @@ def analyze_capture(image_base64: str, api_key: str, od_model,
     }
 
 
-def _get_figure_image(img, box_px: list, pdf_images: list,
+def _get_figure_image(img, box_px: list, pdf_path: str, page_num: int,
                       capture_bbox_norm: list, img_w: int, img_h: int) -> str:
-    """figure 영역의 최적 이미지를 반환 — PDF 원본 우선, 없으면 캡처 크롭
+    """figure 영역의 최적 이미지를 반환 — PDF 렌더링 우선, 없으면 캡처 크롭
 
     Returns:
         base64 인코딩된 PNG 이미지
     """
-    # PDF 이미지가 있으면 위치 매칭 시도
-    if pdf_images and capture_bbox_norm:
+    # PDF 페이지에서 해당 영역을 고해상도로 렌더링 (벡터/래스터 모두 지원)
+    if pdf_path and page_num >= 0 and capture_bbox_norm:
         try:
-            from .pdf_image_extractor import find_matching_pdf_image
+            from .pdf_image_extractor import render_page_region
 
             # OD box_px → 캡처 영역 내 정규화 → 페이지 전체 정규화 좌표로 변환
             cap_x1, cap_y1, cap_x2, cap_y2 = capture_bbox_norm
@@ -134,14 +125,14 @@ def _get_figure_image(img, box_px: list, pdf_images: list,
                 cap_y1 + (box_px[3] / img_h) * cap_h,
             ]
 
-            matched = find_matching_pdf_image(pdf_images, fig_norm)
-            if matched:
-                sys.stderr.write("[od-analyzer] figure: PDF 원본 이미지 사용\n")
-                return matched
+            rendered = render_page_region(pdf_path, page_num, fig_norm, dpi=300)
+            if rendered:
+                sys.stderr.write("[od-analyzer] figure: PDF 300DPI 렌더링 사용\n")
+                return rendered
         except Exception as e:
-            sys.stderr.write(f"[od-analyzer] PDF 이미지 매칭 실패: {e}\n")
+            sys.stderr.write(f"[od-analyzer] PDF 렌더링 실패: {e}\n")
 
     # fallback: 캡처에서 크롭
-    sys.stderr.write("[od-analyzer] figure: 캡처 크롭 사용\n")
+    sys.stderr.write("[od-analyzer] figure: 캡처 크롭 fallback\n")
     crop_bytes = crop_region_from_image(img, box_px)
     return base64.b64encode(crop_bytes).decode("ascii")
