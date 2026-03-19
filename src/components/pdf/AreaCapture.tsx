@@ -135,7 +135,7 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
     setMousePos(null)
   }, [])
 
-  const performCapture = useCallback(async (captureBase64: string, targetBlockId: string) => {
+  const performCapture = useCallback(async (captureBase64: string, targetBlockId: string, captureBboxNorm?: number[]) => {
     if (!window.electronAPI) {
       setCaptureError('Electron API를 사용할 수 없습니다.')
       return
@@ -153,6 +153,7 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
       const result = await window.electronAPI.analyzeCapture(captureBase64, {
         pdfPath: pdfPath || undefined,
         pageNum: pdfPath ? currentPage - 1 : undefined,  // 0-based
+        captureBboxNorm: captureBboxNorm,
       })
       html = result.html
       error = result.error
@@ -267,9 +268,19 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
     const dataUrl = captureCanvas.toDataURL('image/png')
     const base64 = dataUrl.replace(/^data:image\/png;base64,/, '')
 
+    // 캡처 영역의 페이지 내 정규화 좌표 (0.0~1.0) — PDF 이미지 매칭용
+    const canvasW = pageCanvas.clientWidth
+    const canvasH = pageCanvas.clientHeight
+    const captureBboxNorm = [
+      x / canvasW,
+      y / canvasH,
+      (x + w) / canvasW,
+      (y + h) / canvasH,
+    ]
+
     setLastCapture({ base64, blockId: targetBlockId })
 
-    await performCapture(base64, targetBlockId)
+    await performCapture(base64, targetBlockId, captureBboxNorm)
   }, [dragRect, pageCanvas, scale, setCaptureError, performCapture])
 
   // 재시도 핸들러

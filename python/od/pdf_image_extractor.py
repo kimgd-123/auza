@@ -61,7 +61,7 @@ def extract_page_images(pdf_path: str, page_num: int) -> list:
             # 페이지 크롭으로 이미지 추출 (색상 정확도 보장)
             try:
                 clip = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y1)
-                mat = fitz.Matrix(2.0, 2.0)  # 2x 해상도
+                mat = fitz.Matrix(3.0, 3.0)  # 3x 해상도 (고품질)
                 pix = page.get_pixmap(matrix=mat, clip=clip)
 
                 from PIL import Image
