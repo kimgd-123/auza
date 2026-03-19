@@ -58,7 +58,7 @@ def detect_regions_from_image(model, image_bytes: bytes) -> list:
     return detections
 
 
-def crop_region_from_image(pil_img, box_px: list, padding: int = 3) -> bytes:
+def crop_region_from_image(pil_img, box_px: list, padding: int = 5) -> bytes:
     """PIL Image에서 특정 영역을 크롭하여 PNG 바이트 반환
 
     Args:

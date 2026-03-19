@@ -12,8 +12,8 @@ win:
   target: nsis
   # icon: resources/icons/icon.ico  # Phase 8에서 아이콘 추가 후 활성화
 nsis:
-  oneClick: false
-  allowToChangeInstallationDirectory: true
+  oneClick: true
+  perMachine: false
 extraResources:
   - from: python
     to: python

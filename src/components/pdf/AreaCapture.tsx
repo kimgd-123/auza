@@ -148,8 +148,12 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
     let error: string | null = null
 
     if (odEnabled && window.electronAPI.analyzeCapture) {
-      // OD 모드: Python OD 분석 → 영역별 Gemini Vision
-      const result = await window.electronAPI.analyzeCapture(captureBase64)
+      // OD 모드: Python OD 분석 → 영역별 Gemini Vision + PDF 원본 이미지 추출
+      const { pdfPath, currentPage } = useAppStore.getState()
+      const result = await window.electronAPI.analyzeCapture(captureBase64, {
+        pdfPath: pdfPath || undefined,
+        pageNum: pdfPath ? currentPage - 1 : undefined,  // 0-based
+      })
       html = result.html
       error = result.error
       if (result.regions > 0 && !error) {
@@ -212,8 +216,8 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
     const srcW = w * dpr
     const srcH = h * dpr
 
-    // 최소 캡처 해상도 보장: 긴 변 기준 최소 800px
-    const minLongSide = 800
+    // 최소 캡처 해상도 보장 — OD ON: 크롭 후에도 품질 유지 위해 2000px, OFF: 800px
+    const minLongSide = odEnabled ? 2000 : 800
     const longSide = Math.max(srcW, srcH)
     let captureScale = longSide < minLongSide ? minLongSide / longSide : 1.0
 

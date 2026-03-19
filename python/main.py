@@ -113,6 +113,9 @@ def handle_command(command: str, payload: dict) -> dict:
 
         image_base64 = payload.get('imageBase64', '')
         api_key = payload.get('apiKey', '')
+        pdf_path = payload.get('pdfPath', '')
+        page_num = payload.get('pageNum', -1)
+        capture_bbox_norm = payload.get('captureBboxNorm')
 
         if not image_base64:
             return {"error": "imageBase64가 필요합니다"}
@@ -120,7 +123,11 @@ def handle_command(command: str, payload: dict) -> dict:
             return {"error": "apiKey가 필요합니다"}
 
         od_model = _get_od_model()
-        return analyze_capture(image_base64, api_key, od_model)
+        return analyze_capture(
+            image_base64, api_key, od_model,
+            pdf_path=pdf_path, page_num=page_num,
+            capture_bbox_norm=capture_bbox_norm,
+        )
 
     else:
         return {"error": f"Unknown command: {command}"}

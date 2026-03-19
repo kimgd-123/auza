@@ -5,8 +5,9 @@ import 'react-pdf/dist/Page/TextLayer.css'
 import { useAppStore } from '@/stores/appStore'
 import AreaCapture from './AreaCapture'
 
-// pdf.js worker (public 폴더에서 로드 — Electron 호환)
-pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
+// pdf.js worker — node_modules에서 직접 import (개발/패키징 모두 호환)
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker
 
 export default function PdfViewer() {
   const { pdfPath, currentPage, totalPages, setCurrentPage, setTotalPages, captureLoading, captureError, setCaptureError } = useAppStore()

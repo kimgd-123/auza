@@ -9,8 +9,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('gemini:vision', imageBase64, prompt) as Promise<{ html: string | null; error: string | null }>,
 
   // OD 기반 캡처 분석
-  analyzeCapture: (imageBase64: string) =>
-    ipcRenderer.invoke('capture:analyze', imageBase64) as Promise<{ html: string | null; regions: number; error: string | null }>,
+  analyzeCapture: (imageBase64: string, options?: { pdfPath?: string; pageNum?: number; captureBboxNorm?: number[] }) =>
+    ipcRenderer.invoke('capture:analyze', imageBase64, options) as Promise<{ html: string | null; regions: number; error: string | null }>,
 
   // Gemini 채팅
   geminiChat: (payload: { messages: Array<{ role: string; text: string }>; context?: string }) =>

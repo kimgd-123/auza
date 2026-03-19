@@ -93,8 +93,15 @@ ipcMain.handle('file:readPdf', async (_event, filePath: string) => {
   }
 })
 
-// Gemini API 키 로딩: .env.local → %APPDATA%/AUZA/config.json
+// ── 테스트용 내장 API 키 (정식 릴리즈 시 삭제) ──
+// TODO: 정식 릴리즈 전 아래 줄을 삭제하세요
+const TEST_EMBEDDED_API_KEY = '***REMOVED***'
+
+// Gemini API 키 로딩: 내장키 → .env.local → %APPDATA%/AUZA/config.json
 async function loadGeminiApiKey(): Promise<string | null> {
+  // 0. 테스트용 내장 키 (정식 릴리즈 시 삭제)
+  if (TEST_EMBEDDED_API_KEY) return TEST_EMBEDDED_API_KEY
+
   // 1. .env.local
   try {
     const envPath = path.join(app.getAppPath(), '.env.local')
@@ -199,7 +206,9 @@ ipcMain.handle(
 )
 
 // IPC: OD 기반 캡처 영역 분석 — Python OD + Gemini Vision
-ipcMain.handle('capture:analyze', async (_event, imageBase64: string) => {
+ipcMain.handle('capture:analyze', async (_event, imageBase64: string, options?: {
+  pdfPath?: string; pageNum?: number; captureBboxNorm?: number[]
+}) => {
   try {
     const apiKey = await loadGeminiApiKey()
     if (!apiKey) {
@@ -210,6 +219,9 @@ ipcMain.handle('capture:analyze', async (_event, imageBase64: string) => {
     const result = await sendPythonCommand('od_analyze', {
       imageBase64,
       apiKey,
+      pdfPath: options?.pdfPath || '',
+      pageNum: options?.pageNum ?? -1,
+      captureBboxNorm: options?.captureBboxNorm || null,
     }, 300_000)
 
     if (!result.success || !result.data) {
