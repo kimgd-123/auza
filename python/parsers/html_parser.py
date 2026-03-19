@@ -260,11 +260,20 @@ def _extract_color(element: Tag) -> Optional[str]:
 
 
 def _extract_font_size(element: Tag) -> Optional[int]:
-    """style에서 font-size 추출 (pt 단위)"""
+    """style에서 font-size 추출 → pt 단위로 반환. px인 경우 pt로 변환."""
     style = element.get('style', '')
-    match = re.search(r'font-size:\s*(\d+)', style)
+    match = re.search(r'font-size:\s*(\d+(?:\.\d+)?)\s*(px|pt|em|rem)?', style)
     if match:
-        return int(match.group(1))
+        size = float(match.group(1))
+        unit = match.group(2) or 'px'
+        if unit == 'px':
+            # px → pt 변환 (1px = 0.75pt at 96 DPI)
+            return max(1, round(size * 72 / 96))
+        elif unit in ('em', 'rem'):
+            # em/rem → pt (기본 16px = 12pt 기준)
+            return max(1, round(size * 12))
+        else:
+            return max(1, round(size))  # pt
     return None
 
 

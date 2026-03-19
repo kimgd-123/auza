@@ -207,19 +207,28 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
     }
 
     // 캡처 스케일 결정 (PRD §4.3.4)
+    // 소스 해상도: 화면 canvas의 DPR 적용된 픽셀 / 화면 표시 크기
+    const dpr = pageCanvas.width / pageCanvas.clientWidth
+    const srcW = w * dpr
+    const srcH = h * dpr
+
+    // 최소 캡처 해상도 보장: 긴 변 기준 최소 800px
+    const minLongSide = 800
+    const longSide = Math.max(srcW, srcH)
+    let captureScale = longSide < minLongSide ? minLongSide / longSide : 1.0
+
+    // 소형 영역은 추가 확대
     const shortSide = Math.min(w, h)
-    let captureScale = 2.5
-    if (shortSide < 100) captureScale = 3.0
+    if (shortSide < 100) captureScale = Math.max(captureScale, 3.0 / (scale * dpr))
 
-    const pdfW = w / scale
-    const pdfH = h / scale
-
-    if (Math.max(pdfW * captureScale, pdfH * captureScale) > 4096) {
-      captureScale = 2.0
+    // 최대 크기 제한 (4096px)
+    const maxDim = Math.max(srcW * captureScale, srcH * captureScale)
+    if (maxDim > 4096) {
+      captureScale = 4096 / Math.max(srcW, srcH)
     }
 
-    const finalW = Math.round(pdfW * captureScale)
-    const finalH = Math.round(pdfH * captureScale)
+    const finalW = Math.round(srcW * captureScale)
+    const finalH = Math.round(srcH * captureScale)
 
     const captureCanvas = document.createElement('canvas')
     captureCanvas.width = finalW
@@ -227,7 +236,6 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
     const ctx = captureCanvas.getContext('2d')
     if (!ctx) return
 
-    const dpr = pageCanvas.width / pageCanvas.clientWidth
     ctx.drawImage(
       pageCanvas,
       x * dpr, y * dpr, w * dpr, h * dpr,
