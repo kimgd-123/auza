@@ -49,6 +49,7 @@ def _estimate_text_width_mm(text: str) -> float:
 class HwpWriter(BaseWriter):
     def __init__(self):
         self._hwp = None
+        self._hwp_setup_done = False  # write-time 설정(RegisterModule/Visible/FileNew) 완료 여부
         self._math_mappings = {}  # {latex: hwp_script} 표 셀 내 수식 변환용
 
     def _get_body_width(self, hwp) -> int:
@@ -68,45 +69,53 @@ class HwpWriter(BaseWriter):
             return fallback
 
     def _get_hwp(self):
-        """한글 프로그램에 연결 — 실행 중이면 연결, 없으면 자동 실행"""
-        if self._hwp is not None:
+        """한글 프로그램에 연결 — 실행 중이면 연결, 없으면 자동 실행 + write-time 설정"""
+        if self._hwp is not None and self._hwp_setup_done:
             return self._hwp
 
         import win32com.client
 
-        # 1. 이미 실행 중인 한글에 연결 시도
-        try:
-            self._hwp = win32com.client.GetActiveObject("HWPFrame.HwpObject.1")
-        except Exception:
-            # 2. 없으면 새로 실행
+        if self._hwp is None:
+            # 1. 이미 실행 중인 한글에 연결 시도
             try:
-                self._hwp = win32com.client.gencache.EnsureDispatch("HWPFrame.HwpObject.1")
+                self._hwp = win32com.client.GetActiveObject("HWPFrame.HwpObject.1")
             except Exception:
-                self._hwp = win32com.client.Dispatch("HWPFrame.HwpObject.1")
+                # 2. 없으면 새로 실행
+                try:
+                    self._hwp = win32com.client.gencache.EnsureDispatch("HWPFrame.HwpObject.1")
+                except Exception:
+                    self._hwp = win32com.client.Dispatch("HWPFrame.HwpObject.1")
 
-        # 보안 모듈 등록 시도
-        try:
-            self._hwp.RegisterModule("FilePathCheckDLL", "FilePathCheckerModule")
-        except Exception:
-            pass
+        # write-time 설정 (check_connection에서 캐시된 경우에도 실행)
+        if not self._hwp_setup_done:
+            # 보안 모듈 등록 시도
+            try:
+                self._hwp.RegisterModule("FilePathCheckDLL", "FilePathCheckerModule")
+            except Exception:
+                pass
 
-        # 창 보이기 (Dispatch로 실행 시 숨겨진 상태일 수 있음)
-        try:
-            self._hwp.XHwpWindows.Item(0).Visible = True
-        except Exception:
-            pass
+            # 창 보이기 (Dispatch로 실행 시 숨겨진 상태일 수 있음)
+            try:
+                self._hwp.XHwpWindows.Item(0).Visible = True
+            except Exception:
+                pass
 
-        # 새로 실행된 경우 빈 문서가 없으면 생성
-        try:
-            if self._hwp.XHwpDocuments.Count == 0:
-                self._hwp.HAction.Run("FileNew")
-        except Exception:
-            pass
+            # 새로 실행된 경우 빈 문서가 없으면 생성
+            try:
+                if self._hwp.XHwpDocuments.Count == 0:
+                    self._hwp.HAction.Run("FileNew")
+            except Exception:
+                pass
+
+            self._hwp_setup_done = True
 
         return self._hwp
 
+    # 미연결 시 통일 메시지
+    _DISCONNECTED_MSG = "한글 프로그램에 연결할 수 없습니다. 한글을 먼저 실행해주세요."
+
     def check_connection(self) -> dict:
-        """연결 확인 — GetActiveObject 우선, Dispatch fallback"""
+        """연결 확인 — passive probe. _hwp를 캐시하지만 write-time 설정은 안 함."""
         try:
             import win32com.client
             # 이미 연결된 인스턴스가 있으면 재검증
@@ -116,47 +125,19 @@ class HwpWriter(BaseWriter):
                     return {"connected": True, "error": None}
                 except Exception:
                     self._hwp = None
+                    self._hwp_setup_done = False
 
-            # 1차: GetActiveObject (ROT 등록된 경우)
-            hwp = None
-            try:
-                hwp = win32com.client.GetActiveObject("HWPFrame.HwpObject.1")
-            except Exception:
-                pass
-
-            # 2차: Dispatch (ROT 미등록 한글 버전 — Visible=False로 반환하는 경우 포함)
-            if hwp is None:
-                try:
-                    hwp = win32com.client.Dispatch("HWPFrame.HwpObject.1")
-                except Exception:
-                    return {"connected": False, "error": "한글이 실행되어 있지 않습니다."}
-
+            # GetActiveObject만 시도
+            hwp = win32com.client.GetActiveObject("HWPFrame.HwpObject.1")
             hwp.XHwpDocuments.Count  # 연결 검증
-            self._hwp = hwp
-
-            # 보안 모듈 등록 시도
-            try:
-                hwp.RegisterModule("FilePathCheckDLL", "FilePathCheckerModule")
-            except Exception:
-                pass
-
-            # 창 보이기 (Dispatch로 생성된 경우 숨겨져 있을 수 있음)
-            try:
-                hwp.XHwpWindows.Item(0).Visible = True
-            except Exception:
-                pass
-
-            # 빈 문서가 없으면 생성
-            try:
-                if hwp.XHwpDocuments.Count == 0:
-                    hwp.HAction.Run("FileNew")
-            except Exception:
-                pass
-
+            self._hwp = hwp  # 캐시하여 check_cursor 등에서 재사용
+            # _hwp_setup_done은 False 유지 → _get_hwp()에서 write-time 설정 수행
             return {"connected": True, "error": None}
         except Exception as e:
+            sys.stderr.write(f"[hwp-writer] check_connection failed: {e}\n")
             self._hwp = None
-            return {"connected": False, "error": str(e)}
+            self._hwp_setup_done = False
+            return {"connected": False, "error": self._DISCONNECTED_MSG}
 
     def check_cursor_position(self) -> dict:
         """커서가 문서 끝에 있는지 확인 (PRD §4.6.1) — 자동 실행 안 함"""

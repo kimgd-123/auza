@@ -275,7 +275,8 @@ ipcMain.handle(
     _event,
     payload: { filePath: string; outputPath?: string; delay?: number; limit?: number },
   ) => {
-    const result = await sendPythonCommand('fix_equation_width', payload)
+    // 수식 너비 조정은 수식 수에 따라 오래 걸릴 수 있어 10분 타임아웃
+    const result = await sendPythonCommand('fix_equation_width', payload, 600_000)
     return {
       success: result.success,
       data: result.data,

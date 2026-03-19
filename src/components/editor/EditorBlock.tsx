@@ -26,7 +26,7 @@ export default function EditorBlock({ block, index, onDragStart, onDragOver, onD
     try {
       const conn = await checkHwpConnection()
       if (!conn.connected) {
-        alert(conn.error || '한글 프로그램이 실행 중이지 않습니다.')
+        alert(conn.error || '한글 프로그램에 연결할 수 없습니다. 한글을 먼저 실행해주세요.')
         return
       }
       const result = await exportBlockToHwp(block.id)

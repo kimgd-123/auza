@@ -8,6 +8,7 @@ export default function MenuBar() {
   const { layoutMode, setLayoutMode, hwpExporting, setHwpExporting, setHwpExportError, setHwpConnected } = useAppStore()
   const [showCursorDialog, setShowCursorDialog] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [eqFixing, setEqFixing] = useState(false)
 
   const handleOpenPdf = async () => {
     if (!window.electronAPI) return
@@ -19,33 +20,73 @@ export default function MenuBar() {
     }
   }
 
-  const handleExportHwp = useCallback(async () => {
-    if (hwpExporting) return
+  const hwpBusy = hwpExporting || eqFixing
 
+  const handleExportHwp = useCallback(async () => {
+    if (hwpBusy) return
+
+    // precheck 시작부터 busy 상태 설정
+    setHwpExporting(true)
     setHwpExportError(null)
 
-    // 1. HWP 연결 확인 + 상태 동기화
-    const conn = await checkHwpConnection()
-    setHwpConnected(conn.connected)
-    if (!conn.connected) {
-      setHwpExportError(conn.error || '한글 프로그램이 실행 중이지 않습니다. 한글을 먼저 실행해주세요.')
-      return
-    }
+    try {
+      // 1. HWP 연결 확인 + 상태 동기화
+      const conn = await checkHwpConnection()
+      setHwpConnected(conn.connected)
+      if (!conn.connected) {
+        setHwpExportError(conn.error || '한글 프로그램에 연결할 수 없습니다. 한글을 먼저 실행해주세요.')
+        setHwpExporting(false)
+        return
+      }
 
-    // 2. 커서 위치 확인 (PRD §4.6.1)
-    const cursor = await checkHwpCursor()
-    if (cursor.error) {
-      setHwpExportError(cursor.error)
-      return
-    }
-    if (!cursor.at_end) {
-      setShowCursorDialog(true)
-      return
-    }
+      // 2. 커서 위치 확인 (PRD §4.6.1)
+      const cursor = await checkHwpCursor()
+      if (cursor.error) {
+        setHwpExportError(cursor.error)
+        setHwpExporting(false)
+        return
+      }
+      if (!cursor.at_end) {
+        setShowCursorDialog(true)
+        setHwpExporting(false)
+        return
+      }
 
-    // 3. 내보내기 실행
-    await doExport()
-  }, [hwpExporting, setHwpExporting, setHwpExportError])
+      // 3. 내보내기 실행
+      await doExport()
+    } catch {
+      setHwpExportError('HWP 작성 중 오류가 발생했습니다.')
+      setHwpExporting(false)
+    }
+  }, [hwpBusy, setHwpExporting, setHwpExportError])
+
+  const handleFixEquationWidth = useCallback(async () => {
+    if (hwpBusy || !window.electronAPI) return
+
+    // HWP 파일 선택
+    const filePath = await window.electronAPI.openFile({
+      filters: [{ name: 'HWP Files', extensions: ['hwp', 'hwpx'] }],
+    })
+    if (!filePath) return
+
+    setEqFixing(true)
+    setHwpExportError(null)
+
+    try {
+      const result = await window.electronAPI.fixEquationWidth({ filePath })
+      if (!result.success) {
+        setHwpExportError(result.error || '수식 너비 조정에 실패했습니다.')
+      } else {
+        const data = result.data as { processed?: number; total_equations?: number; output_path?: string }
+        setHwpExportError(null)
+        alert(`수식 너비 조정 완료\n처리: ${data.processed ?? 0}/${data.total_equations ?? 0}개\n저장: ${data.output_path ?? ''}`)
+      }
+    } catch {
+      setHwpExportError('수식 너비 조정 중 오류가 발생했습니다.')
+    } finally {
+      setEqFixing(false)
+    }
+  }, [hwpBusy, setHwpExportError])
 
   const doExport = useCallback(async () => {
     setShowCursorDialog(false)
@@ -96,10 +137,23 @@ export default function MenuBar() {
         <LayoutPicker current={layoutMode} onChange={setLayoutMode} />
 
         <button
-          onClick={handleExportHwp}
-          disabled={hwpExporting}
+          onClick={handleFixEquationWidth}
+          disabled={hwpBusy}
           className={`px-3 py-1 rounded transition-colors ${
-            hwpExporting
+            hwpBusy
+              ? 'bg-gray-400 text-white cursor-wait'
+              : 'bg-gray-600 text-white hover:bg-gray-700'
+          }`}
+          title="HWP 파일의 수식 너비를 자동 조정합니다"
+        >
+          {eqFixing ? '수식 조정 중...' : '수식 너비'}
+        </button>
+
+        <button
+          onClick={handleExportHwp}
+          disabled={hwpBusy}
+          className={`px-3 py-1 rounded transition-colors ${
+            hwpBusy
               ? 'bg-gray-400 text-white cursor-wait'
               : 'bg-blue-600 text-white hover:bg-blue-700'
           }`}
