@@ -118,6 +118,13 @@ function tableCellAttrs(node: ProseMirrorNode): string {
 
   const styles: string[] = []
   if (attrs.backgroundColor) styles.push(`background-color: ${attrs.backgroundColor}`)
+
+  // 첫 paragraph의 textAlign을 셀 스타일로 반영
+  const firstChild = node.content?.[0]
+  if (firstChild?.type === 'paragraph' && firstChild.attrs?.textAlign && firstChild.attrs.textAlign !== 'left') {
+    styles.push(`text-align: ${firstChild.attrs.textAlign}`)
+  }
+
   if (styles.length > 0) parts.push(`style="${styles.join('; ')}"`)
 
   return parts.length > 0 ? ' ' + parts.join(' ') : ''

@@ -214,6 +214,7 @@ def _parse_table(element: Tag) -> Optional[ContentItem]:
             colspan = int(td.get('colspan', 1))
             rowspan = int(td.get('rowspan', 1))
             bg_color = _extract_bg_color(td)
+            align = _extract_text_align(td)
             content = td.decode_contents()  # 내부 HTML 유지
             is_header = td.name == 'th'
             cells.append(TableCell(
@@ -222,6 +223,7 @@ def _parse_table(element: Tag) -> Optional[ContentItem]:
                 rowspan=rowspan,
                 bg_color=bg_color,
                 bold=is_header,
+                align=align,
             ))
         if cells:
             rows.append(cells)
@@ -264,6 +266,25 @@ def _extract_font_size(element: Tag) -> Optional[int]:
     if match:
         return int(match.group(1))
     return None
+
+
+def _extract_text_align(element: Tag) -> str:
+    """style에서 text-align 추출 (기본 left). 자식 <p>의 정렬도 확인."""
+    # 직접 style 확인
+    style = element.get('style', '')
+    if 'text-align: center' in style or 'text-align:center' in style:
+        return 'center'
+    elif 'text-align: right' in style or 'text-align:right' in style:
+        return 'right'
+    # 자식 <p>의 style 확인 (TipTap이 <td><p style="text-align:center">로 직렬화)
+    first_p = element.find('p')
+    if first_p and isinstance(first_p, Tag):
+        p_style = first_p.get('style', '')
+        if 'text-align: center' in p_style or 'text-align:center' in p_style:
+            return 'center'
+        elif 'text-align: right' in p_style or 'text-align:right' in p_style:
+            return 'right'
+    return 'left'
 
 
 def _extract_bg_color(element: Tag) -> Optional[str]:

@@ -40,6 +40,7 @@ class TableCell:
     rowspan: int = 1
     bg_color: Optional[str] = None  # hex
     bold: bool = False
+    align: Literal['left', 'center', 'right'] = 'left'
 
 
 @dataclass

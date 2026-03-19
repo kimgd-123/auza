@@ -12,7 +12,7 @@ import Image from '@tiptap/extension-image'
 import { FontSize } from '@/lib/tiptap-font-size'
 import { CustomTableCell, CustomTableHeader } from '@/lib/tiptap-table-cell-bg'
 import { useEffect, useRef } from 'react'
-import { normalizeHtmlForTipTap } from '@/lib/normalize-html-table'
+import { normalizeContentForEditor } from '@/lib/content-normalizer'
 import EditorToolbar from './EditorToolbar'
 import 'katex/dist/katex.min.css'
 
@@ -101,8 +101,8 @@ export default function RichEditor({ blockId, content, onUpdate, isActive }: Pro
     const handler = (e: Event) => {
       const { blockId: targetId, html } = (e as CustomEvent).detail
       if (targetId !== blockId) return
-      // 테이블 구조 정규화 후 블록 내용 교체 (Gemini는 전체 수정본을 반환)
-      const safeHtml = normalizeHtmlForTipTap(html)
+      // HTML + LaTeX 공통 정규화 후 블록 내용 교체
+      const safeHtml = normalizeContentForEditor(html)
       try {
         editor.commands.setContent(safeHtml, true)
         // setContent 후 store에 즉시 반영 (onUpdate 미발화 방지)

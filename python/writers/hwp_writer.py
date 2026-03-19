@@ -13,12 +13,22 @@ from parsers.document import (
 )
 from writers.base_writer import BaseWriter
 
-# HWP 색상 변환: hex → RGB 정수
-def _hex_to_rgb_int(hex_color: str) -> Optional[int]:
-    """#RRGGBB → HWP RGB 정수 (0x00BBGGRR)"""
-    if not hex_color:
+# HWP 색상 변환: hex/rgb() → RGB 정수
+def _hex_to_rgb_int(color: str) -> Optional[int]:
+    """#RRGGBB 또는 rgb(r,g,b) → HWP RGB 정수 (0x00BBGGRR)"""
+    if not color:
         return None
-    hex_color = hex_color.lstrip('#')
+    color = color.strip()
+    # rgb(r, g, b) / rgba(r, g, b, a) 처리
+    if color.startswith('rgb'):
+        import re
+        m = re.search(r'(\d+)\s*,\s*(\d+)\s*,\s*(\d+)', color)
+        if not m:
+            return None
+        r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return r | (g << 8) | (b << 16)
+    # hex 처리
+    hex_color = color.lstrip('#')
     if len(hex_color) == 3:
         hex_color = ''.join(c * 2 for c in hex_color)
     if len(hex_color) < 6:
@@ -458,6 +468,18 @@ class HwpWriter(BaseWriter):
                         except Exception:
                             pass
 
+                    # 셀 정렬
+                    if cell_data.align and cell_data.align != 'left':
+                        try:
+                            align_map = {'center': 1, 'right': 2}
+                            act = hwp.CreateAction("ParagraphShape")
+                            pset = act.CreateSet()
+                            act.GetDefault(pset)
+                            pset.SetItem("Align", align_map.get(cell_data.align, 0))
+                            act.Execute(pset)
+                        except Exception:
+                            pass
+
                     # 셀 내용 (HTML 태그 제거 후 텍스트+수식 분리 삽입)
                     content = re.sub(r'<[^>]+>', '', cell_data.content).strip()
                     if content:
@@ -621,26 +643,31 @@ class HwpWriter(BaseWriter):
                     pass
 
     def _write_equation(self, hwp, math: MathEquation):
-        """수식 삽입 (EquEdit 액션)"""
+        """수식 삽입 (EquationCreate 액션)
+
+        Raises:
+            RuntimeError: EquationCreate COM 호출 실패 시
+        """
         hwp_script = math.hwp_script
         if not hwp_script:
-            # HWP 스크립트가 없으면 LaTeX 원문을 텍스트로 삽입
+            # HWP 스크립트가 없으면 LaTeX 원문을 텍스트로 삽입 (fallback)
             hwp.HAction.GetDefault("InsertText", hwp.HParameterSet.HInsertText.HSet)
             hwp.HParameterSet.HInsertText.Text = f"[수식: {math.latex}]"
             hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
+            sys.stderr.write(f"[hwp-writer] Equation fallback (no hwp_script): '{math.latex[:40]}'\n")
             return
 
         sys.stderr.write(f"[hwp-writer] Equation: latex='{math.latex[:40]}' → hwp='{hwp_script[:40]}'\n")
 
-        # EquationCreate — 새 수식 삽입 (EquEdit은 기존 수식 편집용이라 실패함)
-        try:
-            pset = hwp.HParameterSet.HEqEdit
-            hwp.HAction.GetDefault("EquationCreate", pset.HSet)
-            pset.string = hwp_script
-            pset.EqFontName = "HancomEQN"
-            pset.BaseUnit = hwp.PointToHwpUnit(10.0)
-            r = hwp.HAction.Execute("EquationCreate", pset.HSet)
-            if not r:
-                sys.stderr.write(f"[hwp-writer] EquationCreate FAILED: '{hwp_script[:60]}'\n")
-        except Exception as e:
-            sys.stderr.write(f"[hwp-writer] EquationCreate ERROR: {e}\n")
+        pset = hwp.HParameterSet.HEqEdit
+        hwp.HAction.GetDefault("EquationCreate", pset.HSet)
+        pset.string = hwp_script
+        pset.EqFontName = "HancomEQN"
+        pset.BaseUnit = hwp.PointToHwpUnit(10.0)
+        r = hwp.HAction.Execute("EquationCreate", pset.HSet)
+        if not r:
+            # 실패 시 LaTeX 원문을 텍스트로 삽입 (fallback) — 에러는 상위로 전파하지 않음
+            hwp.HAction.GetDefault("InsertText", hwp.HParameterSet.HInsertText.HSet)
+            hwp.HParameterSet.HInsertText.Text = f"[수식: {math.latex}]"
+            hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
+            sys.stderr.write(f"[hwp-writer] EquationCreate FAILED, fallback text: '{hwp_script[:60]}'\n")

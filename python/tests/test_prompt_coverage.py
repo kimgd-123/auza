@@ -86,5 +86,64 @@ class TestImageSerialization(unittest.TestCase):
         self.assertEqual(len(image_items), 0)
 
 
+class TestCssNormalization(unittest.TestCase):
+    """CSS 색상/크기 변환 테스트"""
+
+    def test_hex_color_conversion(self):
+        """hex 색상 → HWP RGB 정수"""
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+        from writers.hwp_writer import _hex_to_rgb_int
+
+        self.assertEqual(_hex_to_rgb_int('#FF0000'), 0x0000FF)  # 빨강
+        self.assertEqual(_hex_to_rgb_int('#00FF00'), 0x00FF00)  # 초록
+        self.assertEqual(_hex_to_rgb_int('#0000FF'), 0xFF0000)  # 파랑
+
+    def test_rgb_color_conversion(self):
+        """rgb() 색상 → HWP RGB 정수"""
+        from writers.hwp_writer import _hex_to_rgb_int
+
+        self.assertEqual(_hex_to_rgb_int('rgb(255, 0, 0)'), 0x0000FF)
+        self.assertEqual(_hex_to_rgb_int('rgb(0,255,0)'), 0x00FF00)
+        self.assertIsNotNone(_hex_to_rgb_int('rgba(0, 0, 255, 0.5)'))
+
+    def test_invalid_color(self):
+        """잘못된 색상 → None"""
+        from writers.hwp_writer import _hex_to_rgb_int
+
+        self.assertIsNone(_hex_to_rgb_int(''))
+        self.assertIsNone(_hex_to_rgb_int(None))
+
+
+class TestCellAlignment(unittest.TestCase):
+    """표 셀 정렬 파싱 테스트"""
+
+    def test_td_style_align(self):
+        """<td style="text-align: center"> 파싱"""
+        from parsers.html_parser import parse_html
+
+        html = '<table><tr><td style="text-align: center">A</td></tr></table>'
+        doc = parse_html(html)
+        table = doc.items[0].table
+        self.assertEqual(table.rows[0][0].align, 'center')
+
+    def test_td_p_style_align(self):
+        """<td><p style="text-align: center">A</p></td> 파싱"""
+        from parsers.html_parser import parse_html
+
+        html = '<table><tr><td><p style="text-align: center">A</p></td></tr></table>'
+        doc = parse_html(html)
+        table = doc.items[0].table
+        self.assertEqual(table.rows[0][0].align, 'center')
+
+    def test_default_align_left(self):
+        """정렬 없으면 left"""
+        from parsers.html_parser import parse_html
+
+        html = '<table><tr><td>A</td></tr></table>'
+        doc = parse_html(html)
+        table = doc.items[0].table
+        self.assertEqual(table.rows[0][0].align, 'left')
+
+
 if __name__ == '__main__':
     unittest.main()
