@@ -91,27 +91,26 @@ class TestCssNormalization(unittest.TestCase):
 
     def test_hex_color_conversion(self):
         """hex 색상 → HWP RGB 정수"""
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-        from writers.hwp_writer import _hex_to_rgb_int
+        from utils.style_utils import hex_to_rgb_int
 
-        self.assertEqual(_hex_to_rgb_int('#FF0000'), 0x0000FF)  # 빨강
-        self.assertEqual(_hex_to_rgb_int('#00FF00'), 0x00FF00)  # 초록
-        self.assertEqual(_hex_to_rgb_int('#0000FF'), 0xFF0000)  # 파랑
+        self.assertEqual(hex_to_rgb_int('#FF0000'), 0x0000FF)  # 빨강
+        self.assertEqual(hex_to_rgb_int('#00FF00'), 0x00FF00)  # 초록
+        self.assertEqual(hex_to_rgb_int('#0000FF'), 0xFF0000)  # 파랑
 
     def test_rgb_color_conversion(self):
         """rgb() 색상 → HWP RGB 정수"""
-        from writers.hwp_writer import _hex_to_rgb_int
+        from utils.style_utils import hex_to_rgb_int
 
-        self.assertEqual(_hex_to_rgb_int('rgb(255, 0, 0)'), 0x0000FF)
-        self.assertEqual(_hex_to_rgb_int('rgb(0,255,0)'), 0x00FF00)
-        self.assertIsNotNone(_hex_to_rgb_int('rgba(0, 0, 255, 0.5)'))
+        self.assertEqual(hex_to_rgb_int('rgb(255, 0, 0)'), 0x0000FF)
+        self.assertEqual(hex_to_rgb_int('rgb(0,255,0)'), 0x00FF00)
+        self.assertIsNotNone(hex_to_rgb_int('rgba(0, 0, 255, 0.5)'))
 
     def test_invalid_color(self):
         """잘못된 색상 → None"""
-        from writers.hwp_writer import _hex_to_rgb_int
+        from utils.style_utils import hex_to_rgb_int
 
-        self.assertIsNone(_hex_to_rgb_int(''))
-        self.assertIsNone(_hex_to_rgb_int(None))
+        self.assertIsNone(hex_to_rgb_int(''))
+        self.assertIsNone(hex_to_rgb_int(None))
 
 
 class TestCellAlignment(unittest.TestCase):

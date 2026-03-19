@@ -10,10 +10,7 @@ from parsers.document import (
     DocumentStructure, ContentItem, Paragraph, TextRun,
     TableData, TableCell, MathEquation, ImageData,
 )
-
-# 수식 패턴: $$...$$ 블록 우선, $...$ 인라인 (결합 regex로 오버랩 방지)
-COMBINED_MATH_RE = re.compile(r'\$\$([\s\S]+?)\$\$|\$([^$]+)\$')
-BLOCK_MATH_RE = re.compile(r'\$\$([\s\S]+?)\$\$')
+from utils.math_patterns import COMBINED_MATH_RE, BLOCK_MATH_RE
 
 
 def parse_html(html: str, title: str = '') -> DocumentStructure:

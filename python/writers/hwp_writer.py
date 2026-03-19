@@ -12,48 +12,8 @@ from parsers.document import (
     TableData, TableCell, MathEquation, ImageData,
 )
 from writers.base_writer import BaseWriter
-
-# HWP 색상 변환: hex/rgb() → RGB 정수
-def _hex_to_rgb_int(color: str) -> Optional[int]:
-    """#RRGGBB 또는 rgb(r,g,b) → HWP RGB 정수 (0x00BBGGRR)"""
-    if not color:
-        return None
-    color = color.strip()
-    # rgb(r, g, b) / rgba(r, g, b, a) 처리
-    if color.startswith('rgb'):
-        import re
-        m = re.search(r'(\d+)\s*,\s*(\d+)\s*,\s*(\d+)', color)
-        if not m:
-            return None
-        r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        return r | (g << 8) | (b << 16)
-    # hex 처리
-    hex_color = color.lstrip('#')
-    if len(hex_color) == 3:
-        hex_color = ''.join(c * 2 for c in hex_color)
-    if len(hex_color) < 6:
-        return None
-    r = int(hex_color[0:2], 16)
-    g = int(hex_color[2:4], 16)
-    b = int(hex_color[4:6], 16)
-    return r | (g << 8) | (b << 16)
-
-
-def _estimate_text_width_mm(text: str) -> float:
-    """텍스트의 대략적 폭(mm)을 계산. 한글/CJK=3.5mm, 영문/숫자=2mm, 공백=1.5mm"""
-    width = 0.0
-    for ch in text:
-        cp = ord(ch)
-        if cp <= 0x7F:
-            # ASCII: 영문/숫자/기호
-            width += 1.5 if ch == ' ' else 2.0
-        elif (0xAC00 <= cp <= 0xD7AF or   # 한글 음절
-              0x3400 <= cp <= 0x9FFF or    # CJK 통합 한자
-              0xF900 <= cp <= 0xFAFF):     # CJK 호환 한자
-            width += 3.5
-        else:
-            width += 2.5  # 기타 유니코드
-    return width
+from utils.style_utils import hex_to_rgb_int, estimate_text_width_mm, HWPUNIT_PER_MM
+from utils.math_patterns import COMBINED_MATH_RE
 
 
 class HwpWriter(BaseWriter):
@@ -64,7 +24,7 @@ class HwpWriter(BaseWriter):
 
     def _get_body_width(self, hwp) -> int:
         """현재 문서의 본문 영역 폭(HWPUNIT) 반환. 실패 시 A4 기본값(150mm) 사용"""
-        hwp_per_mm = 7200 / 25.4
+        hwp_per_mm = HWPUNIT_PER_MM
         fallback = int(150 * hwp_per_mm)
         try:
             act = hwp.CreateAction("PageSetup")
@@ -324,7 +284,7 @@ class HwpWriter(BaseWriter):
         if run.underline:
             pset.SetItem("UnderlineType", 1)
         if run.color:
-            rgb = _hex_to_rgb_int(run.color)
+            rgb = hex_to_rgb_int(run.color)
             if rgb is not None:
                 pset.SetItem("TextColor", rgb)
         if run.font_size:
@@ -350,12 +310,12 @@ class HwpWriter(BaseWriter):
             for cell in row:
                 if actual_col < col_count:
                     content = re.sub(r'<[^>]+>', '', cell.content).strip()
-                    width_mm = _estimate_text_width_mm(content) + 8  # 양쪽 패딩
+                    width_mm = estimate_text_width_mm(content) + 8  # 양쪽 패딩
                     col_max_mm[actual_col] = max(col_max_mm[actual_col], width_mm)
                 actual_col += cell.colspan
 
         # HWP 단위 변환 — 현재 문서의 실제 본문 폭 사용
-        hwp_per_mm = 7200 / 25.4
+        hwp_per_mm = HWPUNIT_PER_MM
         page_width = self._get_column_width(hwp)
         min_col_width = int(12 * hwp_per_mm)  # 최소 열 폭 12mm
 
@@ -528,7 +488,7 @@ class HwpWriter(BaseWriter):
     def _insert_text_with_math(self, hwp, content: str):
         """텍스트 내 $...$ 수식을 감지하여 텍스트/수식을 분리 삽입"""
         # $$...$$ 블록 수식과 $...$ 인라인 수식 분리
-        math_re = re.compile(r'\$\$([\s\S]+?)\$\$|\$([^$]+)\$')
+        math_re = COMBINED_MATH_RE
         last_end = 0
         for match in math_re.finditer(content):
             # 수식 앞 텍스트
@@ -559,7 +519,7 @@ class HwpWriter(BaseWriter):
 
     def _set_cell_bg(self, hwp, hex_color: str):
         """셀 배경색 설정 (TableCellBorderFill)"""
-        rgb = _hex_to_rgb_int(hex_color)
+        rgb = hex_to_rgb_int(hex_color)
         if rgb is None:
             return
 
