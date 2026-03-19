@@ -346,7 +346,7 @@ class HwpWriter(BaseWriter):
 
         # HWP 단위 변환 — 현재 문서의 실제 본문 폭 사용
         hwp_per_mm = 7200 / 25.4
-        page_width = self._get_body_width(hwp)
+        page_width = self._get_column_width(hwp)
         min_col_width = int(12 * hwp_per_mm)  # 최소 열 폭 12mm
 
         col_widths = []
@@ -384,7 +384,7 @@ class HwpWriter(BaseWriter):
         act.GetDefault(pset)
         pset.SetItem("Rows", row_count)
         pset.SetItem("Cols", col_count)
-        pset.SetItem("WidthType", 2)   # 단에 맞춤
+        pset.SetItem("WidthType", 0)   # 직접 지정
         pset.SetItem("HeightType", 0)  # 자동
         pset.SetItem("WidthValue", page_width)
 
@@ -399,7 +399,10 @@ class HwpWriter(BaseWriter):
 
         tbl_props = pset.Item("TableProperties")
         tbl_props.SetItem("Width", page_width)
-        tbl_props.SetItem("TreatAsChar", 0)
+        # 다단 설정 시 TreatAsChar=0 (표 단 넘김 허용), 1단은 TreatAsChar=1 (순서 유지)
+        is_multi_col = self._get_column_width(hwp) < self._get_body_width(hwp)
+        tbl_props.SetItem("TreatAsChar", 0 if is_multi_col else 1)
+        tbl_props.SetItem("PageBreak", 1)    # 페이지/단 경계에서 나눔 허용
         pset.SetItem("TableProperties", tbl_props)
 
         act.Execute(pset)
@@ -593,10 +596,13 @@ class HwpWriter(BaseWriter):
                         new_h = int(cur_h * ratio)
                         props.SetItem("Width", target_w)
                         props.SetItem("Height", new_h)
-                        ctrl.Properties = props
                         sys.stderr.write(f"[hwp-writer] image resized: "
                                          f"{cur_w}x{cur_h} → {target_w}x{new_h} HWPUNIT "
                                          f"({target_w*25.4/7200:.0f}x{new_h*25.4/7200:.0f}mm)\n")
+                    # 글자처럼 취급 설정
+                    props.SetItem("TreatAsChar", 1)
+                    ctrl.Properties = props
+                    sys.stderr.write("[hwp-writer] image TreatAsChar=1\n")
                     hwp.HAction.Run("Cancel")
                     # 이미지 뒤로 커서 이동
                     hwp.HAction.Run("MoveRight")
