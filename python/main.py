@@ -108,6 +108,18 @@ def handle_command(command: str, payload: dict) -> dict:
 
         return fix_equation_widths(file_path, output_path, delay, limit)
 
+    elif command == 'extract_pdf_images':
+        from od.pdf_image_extractor import extract_page_images
+
+        pdf_path = payload.get('pdfPath', '')
+        page_num = payload.get('pageNum', -1)
+
+        if not pdf_path:
+            return {"images": [], "error": "pdfPath가 필요합니다"}
+
+        images = extract_page_images(pdf_path, page_num)
+        return {"images": images, "error": None}
+
     elif command == 'od_analyze':
         from od.analyzer import analyze_capture
 

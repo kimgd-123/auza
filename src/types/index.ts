@@ -15,6 +15,7 @@ export interface ElectronAPI {
   openFile: (options?: { filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>
   readPdf: (filePath: string) => Promise<{ data: string | null; error: string | null }>
   geminiVision: (imageBase64: string, prompt: string) => Promise<VisionResult>
+  extractPdfImages: (pdfPath: string, pageNum: number) => Promise<{ images: Array<{ bbox_norm: number[]; base64: string }>; error: string | null }>
   analyzeCapture: (imageBase64: string, options?: { pdfPath?: string; pageNum?: number; captureBboxNorm?: number[] }) => Promise<{ html: string | null; regions: number; error: string | null }>
   geminiChat: (payload: { messages: Array<{ role: string; text: string }>; context?: string }) => Promise<{ text: string | null; error: string | null }>
 

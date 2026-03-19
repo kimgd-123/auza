@@ -205,6 +205,20 @@ ipcMain.handle(
   },
 )
 
+// IPC: PDF 페이지 이미지 추출 (PyMuPDF)
+ipcMain.handle('pdf:extractImages', async (_event, pdfPath: string, pageNum: number) => {
+  try {
+    const result = await sendPythonCommand('extract_pdf_images', { pdfPath, pageNum })
+    if (!result.success || !result.data) {
+      return { images: [], error: result.error }
+    }
+    const data = result.data as { images: Array<{ bbox_norm: number[]; base64: string }>; error: string | null }
+    return { images: data.images || [], error: data.error }
+  } catch (err) {
+    return { images: [], error: (err as Error).message }
+  }
+})
+
 // IPC: OD 기반 캡처 영역 분석 — Python OD + Gemini Vision
 ipcMain.handle('capture:analyze', async (_event, imageBase64: string, options?: {
   pdfPath?: string; pageNum?: number; captureBboxNorm?: number[]

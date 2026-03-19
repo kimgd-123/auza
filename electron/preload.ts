@@ -8,6 +8,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   geminiVision: (imageBase64: string, prompt: string) =>
     ipcRenderer.invoke('gemini:vision', imageBase64, prompt) as Promise<{ html: string | null; error: string | null }>,
 
+  // PDF 페이지 이미지 추출
+  extractPdfImages: (pdfPath: string, pageNum: number) =>
+    ipcRenderer.invoke('pdf:extractImages', pdfPath, pageNum) as Promise<{ images: Array<{ bbox_norm: number[]; base64: string }>; error: string | null }>,
+
   // OD 기반 캡처 분석
   analyzeCapture: (imageBase64: string, options?: { pdfPath?: string; pageNum?: number; captureBboxNorm?: number[] }) =>
     ipcRenderer.invoke('capture:analyze', imageBase64, options) as Promise<{ html: string | null; regions: number; error: string | null }>,

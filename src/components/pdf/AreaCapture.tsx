@@ -167,6 +167,24 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
       const result = await window.electronAPI.geminiVision(captureBase64, VISION_PROMPT)
       html = result.html ? stripCodeFences(result.html) : null
       error = result.error
+
+      // PDF 이미지 추출 — OD OFF에서도 이미지를 포함
+      if (html && window.electronAPI.extractPdfImages) {
+        const { pdfPath, currentPage } = useAppStore.getState()
+        if (pdfPath) {
+          try {
+            const imgResult = await window.electronAPI.extractPdfImages(pdfPath, currentPage - 1)
+            if (imgResult.images && imgResult.images.length > 0) {
+              const imgTags = imgResult.images.map(
+                (img) => `<img src="data:image/png;base64,${img.base64}" alt="PDF 이미지" style="max-width: 100%;" />`
+              ).join('\n')
+              html = imgTags + '\n' + html
+            }
+          } catch {
+            // 이미지 추출 실패는 무시
+          }
+        }
+      }
     }
 
     setCaptureLoading(false)
