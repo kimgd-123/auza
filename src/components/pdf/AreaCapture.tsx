@@ -266,9 +266,20 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
     const blockStillExists = useAppStore.getState().blocks.some((b) => b.id === targetBlockId)
     if (!blockStillExists) return
 
-    window.dispatchEvent(new CustomEvent('auza:insertHtml', {
-      detail: { blockId: targetBlockId, html },
-    }))
+    // 접힌 블록이면 자동 펼기
+    const { collapsedBlockIds: collapsed2, toggleBlockCollapse: toggle2 } = useAppStore.getState()
+    if (collapsed2.has(targetBlockId)) {
+      toggle2(targetBlockId)
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('auza:insertHtml', {
+          detail: { blockId: targetBlockId, html },
+        }))
+      }, 100)
+    } else {
+      window.dispatchEvent(new CustomEvent('auza:insertHtml', {
+        detail: { blockId: targetBlockId, html },
+      }))
+    }
   }, [setCaptureLoading, setCaptureError, odEnabled])
 
   const handleMouseUp = useCallback(async () => {
