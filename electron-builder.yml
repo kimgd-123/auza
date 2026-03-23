@@ -9,8 +9,12 @@ asar: true
 asarUnpack:
   - "!python/**"
 win:
-  target: nsis
+  target:
+    - nsis
+    - portable
   # icon: resources/icons/icon.ico  # Phase 8에서 아이콘 추가 후 활성화
+portable:
+  artifactName: "${productName}-${version}-portable.exe"
 nsis:
   oneClick: true
   perMachine: false
