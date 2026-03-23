@@ -409,9 +409,20 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
         sourcePage: curPage,
       })
       const imgHtml = `<img data-asset-id="${assetId}" src="${highResDataUrl}" alt="이미지 크롭" style="max-width: 100%;" />`
-      window.dispatchEvent(new CustomEvent('auza:insertAtCursor', {
-        detail: { blockId: targetBlockId, html: imgHtml },
-      }))
+      // 접힌 블록이면 자동 펼기
+      const { collapsedBlockIds, toggleBlockCollapse } = useAppStore.getState()
+      if (collapsedBlockIds.has(targetBlockId)) {
+        toggleBlockCollapse(targetBlockId)
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('auza:insertAtCursor', {
+            detail: { blockId: targetBlockId, html: imgHtml },
+          }))
+        }, 100)
+      } else {
+        window.dispatchEvent(new CustomEvent('auza:insertAtCursor', {
+          detail: { blockId: targetBlockId, html: imgHtml },
+        }))
+      }
       return
     }
 

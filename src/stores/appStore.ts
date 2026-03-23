@@ -122,14 +122,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   removeBlock: (id) =>
     set((state) => {
       const { [id]: _, ...remainingHistories } = state.chatHistories
-      // selectedBlockIds에서도 삭제된 블록 제거
       const nextSelected = new Set(state.selectedBlockIds)
       nextSelected.delete(id)
+      const nextCollapsed = new Set(state.collapsedBlockIds)
+      nextCollapsed.delete(id)
+      const { [id]: _p, ...remainingPending } = state.pendingBlockHtml
+      // Asset Store 정리 (별도 store이므로 side-effect로 호출)
+      import('@/stores/assetStore').then(({ useAssetStore }) => {
+        useAssetStore.getState().removeAssetsByBlock(id)
+      })
       return {
         blocks: state.blocks.filter((b) => b.id !== id),
         activeBlockId: state.activeBlockId === id ? null : state.activeBlockId,
         chatHistories: remainingHistories,
         selectedBlockIds: nextSelected,
+        collapsedBlockIds: nextCollapsed,
+        pendingBlockHtml: remainingPending,
       }
     }),
   updateBlock: (id, updates) =>

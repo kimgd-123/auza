@@ -770,7 +770,7 @@ auza_pj/
 | **Phase 9A** | 콘텐츠 컨텍스트 엔진 | ProseMirror JSON→MD 직접 변환, 블록 선택, 2계층 컨텍스트, Asset Store |
 | **Phase 9B** | 양식 분석 POC | 내장 프리셋 2~3종, PPTX 파일 파싱 POC, HWP Vision 분석 spike |
 | **Phase 10** | HWP 생성 MVP | Generation IR/JSON schema, HWP-only 생성, 에디터 미리보기+수정+확정 UX |
-| **Phase 11** | PPT 확장 + 통합 | PPT Writer, PPT용 GenerationIR, 템플릿 바인딩, e2e 테스트, exe 재패키징 |
+| ~~Phase 11~~ | ~~PPT 확장 + 통합~~ | ~~v2.0 범위에서 제외 (2026-03-23)~~ |
 
 ---
 
@@ -998,22 +998,9 @@ HWP 문서
 | 양식 분석 | gemini-3.1-pro-preview (고성능) | 1회 수행 → JSON 캐시 |
 | 자료 생성 | gemini-3.1-pro-preview (고성능) | 핵심 생성 작업 |
 
-### 13.7 Phase 11 — PPT 확장 + 통합
+### ~~13.7 Phase 11 — PPT 확장 + 통합~~ (v2.0 범위 제외, 2026-03-23)
 
-#### 13.7.1 PPT Writer
-- `ppt_writer.py`: win32com COM 인라인 방식
-- PPT Generation IR → 슬라이드/텍스트/표/이미지 자동 생성
-- 수식: KaTeX 렌더링 → 이미지 삽입 (PPT에는 EquEdit 없음)
-- `BaseWriter` 인터페이스 확장: `check_cursor_position()`은 HWP 전용이므로 capability-based 인터페이스로 리팩토링
-
-#### 13.7.2 템플릿 바인딩
-- PPTX slide master/placeholder 구조에 Generation IR 슬롯 매핑
-- 사용자 업로드 PPTX 양식 지원
-
-#### 13.7.3 통합 테스트 + 패키징
-- e2e 회귀 테스트 (캡처→생성→HWP/PPT 전체 플로우)
-- 사용자 평가셋 테스트 (쌍둥이 문제 품질, 지도안 충족률)
-- exe 재패키징
+> Phase 11은 v2.0 릴리즈 범위에서 제외됨. 향후 별도 버전에서 검토.
 
 ### 13.8 아키텍처 종합
 
@@ -1028,8 +1015,7 @@ Generation IR (JSON)
         ↓ generation_ir_parser.py (신규)
 DocumentStructure (기존 공통 중간 구조)
         ↓ (Strategy 패턴)
-        ├── hwp_writer.py → HWP (Phase 10)
-        └── ppt_writer.py → PPT (Phase 11)
+        └── hwp_writer.py → HWP (Phase 10)
 
 Asset Store ← 이미지/캡처 등록 (캡처 시)
            → Generation IR에서 asset_id로 참조

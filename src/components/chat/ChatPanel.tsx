@@ -210,6 +210,19 @@ export default function ChatPanel() {
     const html = stripCodeFences(messageContent)
     if (!html) return
 
+    // 접힌 블록이면 자동 펼기
+    const { collapsedBlockIds, toggleBlockCollapse } = useAppStore.getState()
+    if (collapsedBlockIds.has(activeBlockId)) {
+      toggleBlockCollapse(activeBlockId)
+      // 렌더 후 이벤트 발행을 위해 약간 지연
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('auza:insertHtml', {
+          detail: { blockId: activeBlockId, html },
+        }))
+      }, 100)
+      return
+    }
+
     // 에디터 컴포넌트가 리스닝하는 커스텀 이벤트 발행
     window.dispatchEvent(new CustomEvent('auza:insertHtml', {
       detail: { blockId: activeBlockId, html },

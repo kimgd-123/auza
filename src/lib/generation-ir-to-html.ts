@@ -23,6 +23,7 @@ export function generationIrToHtml(ir: HwpGenerationIR, sourceBlockIds?: string[
   // 소스 블록의 ProseMirror JSON에서 이미지 직접 추출 (Asset Store 무관)
   _sourceImages = []
   _usedFallbackIdx = 0
+  Object.keys(_fallbackCache).forEach((k) => delete _fallbackCache[k])
   if (sourceBlockIds && sourceBlockIds.length > 0) {
     const blocks = useAppStore.getState().blocks
     for (const blockId of sourceBlockIds) {
@@ -189,8 +190,10 @@ function extractImagesFromDoc(node: Record<string, unknown>) {
 
 /**
  * 소스 블록 이미지 풀에서 fallback 찾기
+ * 동일한 unknown ref는 항상 동일한 fallback으로 고정 (캐시)
  */
 let _usedFallbackIdx = 0
+const _fallbackCache: Record<string, ImageEntry> = {}
 function findFallbackImage(ref: string): ImageEntry | undefined {
   if (_sourceImages.length === 0) return undefined
 
@@ -198,10 +201,14 @@ function findFallbackImage(ref: string): ImageEntry | undefined {
   const exact = _sourceImages.find((img) => img.id === ref)
   if (exact) return exact
 
-  // 2. 순서대로 할당 (Gemini가 ID를 임의 생성한 경우)
+  // 2. 캐시 확인 — 동일한 unknown ref는 동일한 fallback
+  if (_fallbackCache[ref]) return _fallbackCache[ref]
+
+  // 3. 순서대로 할당 후 캐시
   if (_sourceImages.length > 0) {
     const idx = _usedFallbackIdx % _sourceImages.length
     _usedFallbackIdx++
+    _fallbackCache[ref] = _sourceImages[idx]
     return _sourceImages[idx]
   }
 
