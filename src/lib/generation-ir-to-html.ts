@@ -121,11 +121,23 @@ function renderRun(run: IRTextRun): string {
   return text
 }
 
+/** 셀 텍스트에서 Gemini가 잘못 넣은 이미지 JSON/참조를 제거 */
+function cleanCellText(text: string): string {
+  return text
+    // {"type": "image", "ref": "IMG_007"} 같은 JSON 스니펫 제거
+    .replace(/\{[^}]*"type"\s*:\s*"image"[^}]*\}/g, '')
+    // [asset:XXX] 참조 제거
+    .replace(/\[asset:[\w_]+\]\s*/g, '')
+    // 이미지 활용: 같은 설명 텍스트도 정리
+    .replace(/이미지\s*활용\s*:\s*/g, '')
+    .trim()
+}
+
 function renderTable(rows: IRTableCell[][]): string {
   const rowsHtml = rows.map((row) => {
     const cells = row.map((cell) => {
       if (typeof cell === 'string') {
-        return `<td>${escapeHtml(cell)}</td>`
+        return `<td>${escapeHtml(cleanCellText(cell))}</td>`
       }
       const parts: string[] = []
       if (cell.colspan && cell.colspan > 1) parts.push(`colspan="${cell.colspan}"`)
@@ -135,7 +147,7 @@ function renderTable(rows: IRTableCell[][]): string {
       if (styles.length > 0) parts.push(`style="${styles.join('; ')}"`)
       const attrStr = parts.length > 0 ? ' ' + parts.join(' ') : ''
       const tag = cell.bold ? 'th' : 'td'
-      return `<${tag}${attrStr}>${escapeHtml(cell.text || '')}</${tag}>`
+      return `<${tag}${attrStr}>${escapeHtml(cleanCellText(cell.text || ''))}</${tag}>`
     }).join('')
     return `<tr>${cells}</tr>`
   }).join('\n')
