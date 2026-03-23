@@ -1,5 +1,5 @@
-appId: com.auza.app
-productName: AUZA
+appId: com.auza-v2.app
+productName: AUZA-v2
 directories:
   output: release
 files:

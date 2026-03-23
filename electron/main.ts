@@ -11,7 +11,7 @@ const allowedPdfPaths = new Set<string>()
 
 // 세션 파일 경로
 function getSessionPath(): string {
-  return path.join(app.getPath('appData'), 'AUZA', 'session.json')
+  return path.join(app.getPath('appData'), 'AUZA-v2', 'session.json')
 }
 
 function createWindow() {
@@ -97,7 +97,7 @@ ipcMain.handle('file:readPdf', async (_event, filePath: string) => {
 // TODO: 정식 릴리즈 전 아래 줄을 삭제하세요
 const TEST_EMBEDDED_API_KEY = '***REMOVED***'
 
-// Gemini API 키 로딩: 내장키 → .env.local → %APPDATA%/AUZA/config.json
+// Gemini API 키 로딩: 내장키 → .env.local → %APPDATA%/AUZA-v2/config.json
 async function loadGeminiApiKey(): Promise<string | null> {
   // 0. 테스트용 내장 키 (정식 릴리즈 시 삭제)
   if (TEST_EMBEDDED_API_KEY) return TEST_EMBEDDED_API_KEY
@@ -110,9 +110,9 @@ async function loadGeminiApiKey(): Promise<string | null> {
     if (match?.[1]?.trim()) return match[1].trim()
   } catch { /* not found */ }
 
-  // 2. %APPDATA%/AUZA/config.json
+  // 2. %APPDATA%/AUZA-v2/config.json
   try {
-    const configPath = path.join(app.getPath('appData'), 'AUZA', 'config.json')
+    const configPath = path.join(app.getPath('appData'), 'AUZA-v2', 'config.json')
     const configContent = await fs.readFile(configPath, 'utf-8')
     const config = JSON.parse(configContent)
     if (config.geminiApiKey) return config.geminiApiKey
@@ -344,7 +344,7 @@ ipcMain.handle('config:getApiKey', async () => {
 
 ipcMain.handle('config:saveApiKey', async (_event, apiKey: string) => {
   try {
-    const configDir = path.join(app.getPath('appData'), 'AUZA')
+    const configDir = path.join(app.getPath('appData'), 'AUZA-v2')
     const configPath = path.join(configDir, 'config.json')
     await fs.mkdir(configDir, { recursive: true })
 
