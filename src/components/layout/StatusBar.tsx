@@ -80,7 +80,7 @@ export default function StatusBar() {
         </span>
       )}
       <div className="flex-1" />
-      <span>AUZA v1.0</span>
+      <span>AUZA v{__APP_VERSION__}</span>
     </div>
   )
 }

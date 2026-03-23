@@ -530,7 +530,7 @@ class HwpWriter(BaseWriter):
         hwp.HAction.Execute("CellBorderFill", hwp.HParameterSet.HCellBorderFill.HSet)
 
     def _write_image(self, hwp, image: ImageData):
-        """이미지 삽입 — base64 → 본문 너비에 맞춰 리사이즈 → 임시 파일 → InsertFile
+        """이미지 삽입 — base64 → PIL로 단 너비에 맞춰 리사이즈 → 임시 파일 → InsertFile
 
         Raises:
             Exception: base64 디코딩 실패 또는 COM InsertFile 실패 시
@@ -541,16 +541,35 @@ class HwpWriter(BaseWriter):
         import io
         from PIL import Image
 
-        # base64 → 임시 PNG 파일
+        # base64 → PIL Image
         img_bytes = base64.b64decode(image.base64)
+        pil_img = Image.open(io.BytesIO(img_bytes))
+
+        # 단 너비(HWPUNIT) → mm → 목표 픽셀 너비 계산 (150 DPI 기준)
+        target_w_hwpunit = self._get_column_width(hwp)
+        target_w_mm = target_w_hwpunit * 25.4 / 7200
+        target_dpi = 150
+        target_w_px = int(target_w_mm / 25.4 * target_dpi)
+
+        orig_w, orig_h = pil_img.size
+        if orig_w > 0 and orig_w != target_w_px:
+            ratio = target_w_px / orig_w
+            target_h_px = int(orig_h * ratio)
+            pil_img = pil_img.resize((target_w_px, target_h_px), Image.LANCZOS)
+            sys.stderr.write(f"[hwp-writer] PIL image resized: "
+                             f"{orig_w}x{orig_h} → {target_w_px}x{target_h_px}px "
+                             f"(target {target_w_mm:.0f}mm @ {target_dpi}DPI)\n")
+
+        # DPI 메타데이터 설정하여 HWP가 정확한 크기로 표시하도록 함
+        pil_img.info['dpi'] = (target_dpi, target_dpi)
 
         tmp_path = None
         try:
             fd, tmp_path = tempfile.mkstemp(suffix='.png', prefix='auza_img_')
-            os.write(fd, img_bytes)
             os.close(fd)
+            pil_img.save(tmp_path, format='PNG', dpi=(target_dpi, target_dpi))
 
-            # 1단계: InsertFile로 이미지 삽입
+            # InsertFile로 이미지 삽입
             hwp.HAction.GetDefault("InsertFile", hwp.HParameterSet.HInsertFile.HSet)
             hwp.HParameterSet.HInsertFile.filename = tmp_path
             hwp.HParameterSet.HInsertFile.KeepSection = 0
@@ -559,10 +578,9 @@ class HwpWriter(BaseWriter):
             if not result:
                 raise RuntimeError(f"InsertFile(image) COM 호출 실패: {tmp_path}")
 
-            # 2단계: 삽입된 이미지를 단 너비에 맞춰 리사이즈
+            # 삽입된 이미지를 글자처럼 취급 + 크기 보정
             import time
             time.sleep(0.2)
-            target_w = self._get_column_width(hwp)
 
             try:
                 hwp.HAction.Run("MoveLeft")
@@ -573,14 +591,14 @@ class HwpWriter(BaseWriter):
                     props = ctrl.Properties
                     cur_w = props.Item("Width")
                     cur_h = props.Item("Height")
-                    if cur_w > 0 and cur_w > target_w:
-                        ratio = target_w / cur_w
+                    # COM으로도 단 너비에 맞춤 (이중 안전장치)
+                    if cur_w > 0 and cur_w != target_w_hwpunit:
+                        ratio = target_w_hwpunit / cur_w
                         new_h = int(cur_h * ratio)
-                        props.SetItem("Width", target_w)
+                        props.SetItem("Width", target_w_hwpunit)
                         props.SetItem("Height", new_h)
-                        sys.stderr.write(f"[hwp-writer] image resized: "
-                                         f"{cur_w}x{cur_h} → {target_w}x{new_h} HWPUNIT "
-                                         f"({target_w*25.4/7200:.0f}x{new_h*25.4/7200:.0f}mm)\n")
+                        sys.stderr.write(f"[hwp-writer] COM image resized: "
+                                         f"{cur_w}x{cur_h} → {target_w_hwpunit}x{new_h} HWPUNIT\n")
                     # 글자처럼 취급 설정
                     props.SetItem("TreatAsChar", 1)
                     ctrl.Properties = props
@@ -589,7 +607,7 @@ class HwpWriter(BaseWriter):
                     # 이미지 뒤로 커서 이동
                     hwp.HAction.Run("MoveRight")
             except Exception as e:
-                sys.stderr.write(f"[hwp-writer] image resize failed: {e}\n")
+                sys.stderr.write(f"[hwp-writer] image post-process failed: {e}\n")
                 try:
                     hwp.HAction.Run("Cancel")
                 except Exception:

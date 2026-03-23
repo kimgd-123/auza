@@ -54,8 +54,82 @@ def detect_regions_from_image(model, image_bytes: bytes) -> list:
                 "box_px": [round(x1), round(y1), round(x2), round(y2)],
             })
 
-    sys.stderr.write(f"[od] {len(detections)} detections in {img_w}x{img_h} image\n")
+    sys.stderr.write(f"[od] {len(detections)} raw detections in {img_w}x{img_h} image\n")
+
+    # 겹치는 영역 제거 (IoU 기반 NMS)
+    detections = _remove_overlapping(detections)
+    sys.stderr.write(f"[od] {len(detections)} detections after overlap removal\n")
+
     return detections
+
+
+def _remove_overlapping(detections: list, iou_threshold: float = 0.3) -> list:
+    """겹치는 영역 제거 — IoU가 threshold 이상이면 confidence 높은 것만 유지
+
+    Args:
+        detections: 감지 결과 리스트
+        iou_threshold: 겹침 판정 기준 (0.3 = 30% 이상 겹치면 중복)
+
+    Returns:
+        중복 제거된 리스트
+    """
+    if len(detections) <= 1:
+        return detections
+
+    # confidence 내림차순 정렬
+    sorted_dets = sorted(detections, key=lambda d: d["score"], reverse=True)
+    keep = []
+
+    while sorted_dets:
+        best = sorted_dets.pop(0)
+        keep.append(best)
+
+        remaining = []
+        for det in sorted_dets:
+            if _calc_iou(best["box_px"], det["box_px"]) < iou_threshold:
+                remaining.append(det)
+            else:
+                sys.stderr.write(
+                    f"[od] 중복 제거: {det['region']}(score={det['score']}) "
+                    f"← {best['region']}(score={best['score']})과 겹침\n"
+                )
+        sorted_dets = remaining
+
+    return keep
+
+
+def _calc_iou(box_a: list, box_b: list) -> float:
+    """두 박스의 IoU(Intersection over Union) 계산
+
+    또한 한 박스가 다른 박스에 대부분 포함되는 경우도 감지
+    (작은 박스 면적 대비 교집합 비율도 반환값에 반영)
+    """
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+
+    # 교집합
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+
+    if ix1 >= ix2 or iy1 >= iy2:
+        return 0.0
+
+    inter = (ix2 - ix1) * (iy2 - iy1)
+    area_a = (ax2 - ax1) * (ay2 - ay1)
+    area_b = (bx2 - bx1) * (by2 - by1)
+
+    # 표준 IoU
+    union = area_a + area_b - inter
+    iou = inter / union if union > 0 else 0.0
+
+    # 작은 박스가 큰 박스에 포함되는 비율 (containment ratio)
+    min_area = min(area_a, area_b)
+    containment = inter / min_area if min_area > 0 else 0.0
+
+    # IoU 또는 containment 중 큰 값 사용
+    return max(iou, containment)
 
 
 def crop_region_from_image(pil_img, box_px: list, padding: int = 5) -> bytes:
