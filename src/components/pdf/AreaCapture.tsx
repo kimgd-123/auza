@@ -311,8 +311,8 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
     const srcW = w * dpr
     const srcH = h * dpr
 
-    // 최소 캡처 해상도 보장 — OD ON / IMG 크롭: 2000px, OFF: 800px
-    const minLongSide = (odEnabled || imgCropMode) ? 2000 : 800
+    // 최소 캡처 해상도 보장 — IMG 크롭: 2000px, OD/일반: 800px
+    const minLongSide = imgCropMode ? 2000 : 800
     const longSide = Math.max(srcW, srcH)
     let captureScale = longSide < minLongSide ? minLongSide / longSide : 1.0
 

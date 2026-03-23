@@ -136,6 +136,7 @@ export default function MenuBar() {
 
         <LayoutPicker current={layoutMode} onChange={setLayoutMode} />
 
+        {/* 수식너비 버튼 — HWP 자체 수식 너비가 충분하므로 비활성화
         <button
           onClick={handleFixEquationWidth}
           disabled={hwpBusy}
@@ -148,6 +149,7 @@ export default function MenuBar() {
         >
           {eqFixing ? '수식 조정 중...' : '수식 너비'}
         </button>
+        */}
 
         <button
           onClick={handleExportHwp}
