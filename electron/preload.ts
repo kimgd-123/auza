@@ -42,6 +42,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveApiKey: (apiKey: string) =>
     ipcRenderer.invoke('config:saveApiKey', apiKey) as Promise<{ success: boolean; error?: string }>,
 
+  // OD 진행 상황 수신
+  onOdProgress: (callback: (progress: { step: string; current: number; total: number; detail: string }) => void) => {
+    const handler = (_event: unknown, progress: { step: string; current: number; total: number; detail: string }) => callback(progress)
+    ipcRenderer.on('od:progress', handler)
+    return () => { ipcRenderer.removeListener('od:progress', handler) }
+  },
+
   // 세션 저장/복구
   saveSession: (data: string) =>
     ipcRenderer.invoke('session:save', data) as Promise<{ success: boolean; error?: string }>,

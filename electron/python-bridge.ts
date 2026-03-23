@@ -8,7 +8,7 @@
 
 import { spawn, ChildProcess } from 'child_process'
 import path from 'path'
-import { app } from 'electron'
+import { app, BrowserWindow } from 'electron'
 
 interface PythonResponse {
   id: string
@@ -79,10 +79,29 @@ export function startPythonProcess(): void {
     }
   })
 
-  // stderr: 로그 출력
+  // stderr: 로그 출력 + OD 진행 상황 파싱
   pythonProcess.stderr?.on('data', (data: Buffer) => {
     const msg = data.toString('utf-8').trim()
-    if (msg) console.log(`[python] ${msg}`)
+    if (!msg) return
+
+    // [od-progress] JSON 라인 파싱 → renderer로 전달
+    for (const line of msg.split('\n')) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('[od-progress] ')) {
+        try {
+          const json = trimmed.slice('[od-progress] '.length)
+          const progress = JSON.parse(json)
+          const win = BrowserWindow.getAllWindows()[0]
+          if (win) {
+            win.webContents.send('od:progress', progress)
+          }
+        } catch {
+          // 파싱 실패는 무시
+        }
+      }
+    }
+
+    console.log(`[python] ${msg}`)
   })
 
   pythonProcess.on('exit', (code) => {

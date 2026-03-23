@@ -33,10 +33,21 @@ export interface ElectronAPI {
   // 세션 복구 시 PDF allowlist 등록
   allowPdf: (filePath: string) => Promise<{ success: boolean; error?: string }>
 
+  // OD 진행 상황 수신
+  onOdProgress: (callback: (progress: OdProgress) => void) => () => void
+
   // 세션 저장/복구
   saveSession: (data: string) => Promise<{ success: boolean; error?: string }>
   loadSession: () => Promise<{ data: string | null; error: string | null }>
   clearSession: () => Promise<{ success: boolean }>
+}
+
+// OD 진행 상황
+export interface OdProgress {
+  step: string  // 'od' | 'region' | 'gemini' | 'done'
+  current: number
+  total: number
+  detail: string
 }
 
 declare global {

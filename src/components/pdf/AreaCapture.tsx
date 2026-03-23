@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@/stores/appStore'
+import type { OdProgress } from '@/types'
 
 const VISION_PROMPT = `이 영역의 콘텐츠를 분석하여 HTML로 구조화해주세요.
 
@@ -94,6 +95,20 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
   const isDraggingRef = useRef(false)
   const [lastCapture, setLastCapture] = useState<{ base64: string; blockId: string } | null>(null)
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
+  const [odProgress, setOdProgress] = useState<OdProgress | null>(null)
+
+  // OD 진행 상황 수신
+  useEffect(() => {
+    if (!window.electronAPI?.onOdProgress) return
+    const cleanup = window.electronAPI.onOdProgress((progress) => {
+      setOdProgress(progress)
+      if (progress.step === 'done') {
+        // 완료 후 잠시 뒤 초기화
+        setTimeout(() => setOdProgress(null), 500)
+      }
+    })
+    return cleanup
+  }, [])
 
   // window-level mouseup으로 페이지 밖 드래그 종료 보장
   useEffect(() => {
@@ -143,6 +158,7 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
 
     setCaptureLoading(true)
     setCaptureError(null)
+    setOdProgress(null)
 
     let html: string | null = null
     let error: string | null = null
@@ -189,6 +205,7 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
     }
 
     setCaptureLoading(false)
+    setOdProgress(null)
 
     if (error || !html) {
       setCaptureError(error || '인식 결과가 비어 있습니다. 더 크게 확대해서 다시 캡처해주세요.')
@@ -435,12 +452,29 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
 
       {captureLoading && (
         <div className="absolute inset-0 bg-black/10 flex items-center justify-center pointer-events-auto cursor-wait">
-          <div className="bg-white rounded-lg px-4 py-2 shadow text-sm text-orange-700 flex items-center gap-2">
-            <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
-              <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="opacity-75" />
-            </svg>
-            {odEnabled ? 'OD 레이아웃 분석 중...' : 'Gemini Vision 인식 중...'}
+          <div className="bg-white rounded-lg px-4 py-3 shadow text-sm text-orange-700 flex flex-col items-center gap-1.5 min-w-[200px]">
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+                <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="opacity-75" />
+              </svg>
+              {odEnabled && odProgress
+                ? odProgress.detail
+                : odEnabled ? 'OD 레이아웃 분석 중...' : 'Gemini Vision 인식 중...'}
+            </div>
+            {odEnabled && odProgress && odProgress.total > 0 && (
+              <div className="w-full flex items-center gap-2">
+                <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-orange-500 rounded-full transition-all duration-300"
+                    style={{ width: `${Math.round((odProgress.current / odProgress.total) * 100)}%` }}
+                  />
+                </div>
+                <span className="text-xs text-gray-500 whitespace-nowrap">
+                  {odProgress.current}/{odProgress.total}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}
