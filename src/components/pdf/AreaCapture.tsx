@@ -69,6 +69,7 @@ const VISION_PROMPT = `이 영역의 콘텐츠를 분석하여 HTML로 구조화
 interface Props {
   pageCanvas: HTMLCanvasElement | null
   scale: number
+  pdfData?: Uint8Array | null
 }
 
 interface DragRect {
@@ -89,7 +90,7 @@ function stripCodeFences(text: string): string {
   return s.trim()
 }
 
-export default function AreaCapture({ pageCanvas, scale }: Props) {
+export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
   const { captureLoading, setCaptureLoading, setCaptureError, odEnabled, setOdEnabled } = useAppStore()
   const overlayRef = useRef<HTMLDivElement>(null)
   const [dragRect, setDragRect] = useState<DragRect | null>(null)
@@ -97,6 +98,7 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
   const [lastCapture, setLastCapture] = useState<{ base64: string; blockId: string; captureBboxNorm?: number[] } | null>(null)
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
   const [odProgress, setOdProgress] = useState<OdProgress | null>(null)
+  const [imgCropMode, setImgCropMode] = useState(false)
 
   // OD 진행 상황 수신
   useEffect(() => {
@@ -298,8 +300,8 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
     const srcW = w * dpr
     const srcH = h * dpr
 
-    // 최소 캡처 해상도 보장 — OD ON: 크롭 후에도 품질 유지 위해 2000px, OFF: 800px
-    const minLongSide = odEnabled ? 2000 : 800
+    // 최소 캡처 해상도 보장 — OD ON / IMG 크롭: 2000px, OFF: 800px
+    const minLongSide = (odEnabled || imgCropMode) ? 2000 : 800
     const longSide = Math.max(srcW, srcH)
     let captureScale = longSide < minLongSide ? minLongSide / longSide : 1.0
 
@@ -341,10 +343,82 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
       (y + h) / canvasH,
     ]
 
+    // 이미지 크롭 모드: PDF를 고해상도로 렌더링 후 크롭
+    if (imgCropMode) {
+      const { currentPage: curPage } = useAppStore.getState()
+
+      let highResDataUrl = dataUrl  // fallback: 화면 canvas 크롭
+
+      // pdfData가 있으면 PDF에서 직접 고해상도 렌더링
+      if (pdfData) {
+        try {
+          const { pdfjs } = await import('react-pdf')
+          const loadingTask = pdfjs.getDocument({ data: pdfData.slice() })
+          const pdfDoc = await loadingTask.promise
+          const page = await pdfDoc.getPage(curPage)
+
+          // 원본 PDF 페이지 크기 대비 300DPI 스케일 계산
+          const pdfViewport = page.getViewport({ scale: 1 })
+          const targetDPI = 300
+          const hiresScale = (targetDPI / 72)  // PDF 기본 72DPI → 300DPI
+          const hiresViewport = page.getViewport({ scale: hiresScale })
+
+          // 오프스크린 캔버스에 고해상도 렌더링
+          const offCanvas = document.createElement('canvas')
+          offCanvas.width = hiresViewport.width
+          offCanvas.height = hiresViewport.height
+          const offCtx = offCanvas.getContext('2d')
+          if (offCtx) {
+            await page.render({ canvasContext: offCtx, viewport: hiresViewport }).promise
+
+            // 화면 좌표 → PDF 좌표 변환하여 크롭
+            const displayW = pageCanvas.clientWidth
+            const displayH = pageCanvas.clientHeight
+            const cropX = (x / displayW) * hiresViewport.width
+            const cropY = (y / displayH) * hiresViewport.height
+            const cropW = (w / displayW) * hiresViewport.width
+            const cropH = (h / displayH) * hiresViewport.height
+
+            const cropCanvas = document.createElement('canvas')
+            cropCanvas.width = Math.round(cropW)
+            cropCanvas.height = Math.round(cropH)
+            const cropCtx = cropCanvas.getContext('2d')
+            if (cropCtx) {
+              cropCtx.drawImage(
+                offCanvas,
+                Math.round(cropX), Math.round(cropY),
+                Math.round(cropW), Math.round(cropH),
+                0, 0,
+                Math.round(cropW), Math.round(cropH),
+              )
+              highResDataUrl = cropCanvas.toDataURL('image/png')
+            }
+          }
+          pdfDoc.destroy()
+        } catch (err) {
+          console.warn('[IMG crop] PDF 고해상도 렌더링 실패, 화면 캔버스 fallback:', err)
+        }
+      }
+
+      const highResBase64 = highResDataUrl.replace(/^data:image\/png;base64,/, '')
+      const assetId = useAssetStore.getState().registerAsset({
+        type: 'image',
+        base64: highResBase64,
+        alt: '이미지 크롭',
+        sourceBlock: targetBlockId,
+        sourcePage: curPage,
+      })
+      const imgHtml = `<img data-asset-id="${assetId}" src="${highResDataUrl}" alt="이미지 크롭" style="max-width: 100%;" />`
+      window.dispatchEvent(new CustomEvent('auza:insertAtCursor', {
+        detail: { blockId: targetBlockId, html: imgHtml },
+      }))
+      return
+    }
+
     setLastCapture({ base64, blockId: targetBlockId, captureBboxNorm })
 
     await performCapture(base64, targetBlockId, captureBboxNorm)
-  }, [dragRect, pageCanvas, scale, setCaptureError, performCapture])
+  }, [dragRect, pageCanvas, scale, setCaptureError, performCapture, imgCropMode])
 
   // 재시도 핸들러
   const handleRetry = useCallback(async () => {
@@ -469,26 +543,37 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
       {/* 캡처 모드 안내 배지 */}
       {!isDraggingRef.current && !captureLoading && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none">
-          <div className="bg-orange-500/90 text-white text-xs px-3 py-1 rounded-full shadow">
-            드래그하여 캡처 영역을 선택하세요
+          <div className={`text-white text-xs px-3 py-1 rounded-full shadow ${imgCropMode ? 'bg-green-500/90' : 'bg-orange-500/90'}`}>
+            {imgCropMode ? '드래그하여 이미지를 크롭하세요' : '드래그하여 캡처 영역을 선택하세요'}
           </div>
         </div>
       )}
 
-      {/* OD 토글 버튼 — 오버레이 위에 별도 배치하여 클릭 가능 */}
+      {/* OD 토글 + IMG 크롭 버튼 */}
       {!isDraggingRef.current && !captureLoading && (
         <div
-          className="absolute top-2 right-2 z-50"
+          className="absolute top-2 right-2 z-50 flex gap-1.5"
           onMouseDown={(e) => e.stopPropagation()}
           onMouseUp={(e) => e.stopPropagation()}
         >
+          <button
+            className={`text-xs px-2.5 py-1 rounded-full shadow transition-colors cursor-pointer ${
+              imgCropMode
+                ? 'bg-green-500 text-white'
+                : 'bg-white/90 text-gray-600 hover:bg-gray-100'
+            }`}
+            onClick={() => { setImgCropMode(!imgCropMode); if (!imgCropMode) setOdEnabled(false) }}
+            title={imgCropMode ? '이미지 크롭 모드 ON — 드래그 영역을 이미지로 삽입' : '이미지 크롭 모드 OFF'}
+          >
+            {imgCropMode ? 'IMG ON' : 'IMG'}
+          </button>
           <button
             className={`text-xs px-2.5 py-1 rounded-full shadow transition-colors cursor-pointer ${
               odEnabled
                 ? 'bg-blue-500 text-white'
                 : 'bg-white/90 text-gray-600 hover:bg-gray-100'
             }`}
-            onClick={() => setOdEnabled(!odEnabled)}
+            onClick={() => { setOdEnabled(!odEnabled); if (!odEnabled) setImgCropMode(false) }}
             title={odEnabled ? 'OD 레이아웃 분석 ON' : 'OD 레이아웃 분석 OFF'}
           >
             {odEnabled ? 'OD ON' : 'OD OFF'}

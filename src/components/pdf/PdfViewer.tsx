@@ -249,7 +249,7 @@ export default function PdfViewer() {
                 onRenderSuccess={onPageRenderSuccess}
               />
               {tool === 'capture' && pageCanvas && (
-                <AreaCapture pageCanvas={pageCanvas} scale={scale} />
+                <AreaCapture pageCanvas={pageCanvas} scale={scale} pdfData={pdfData} />
               )}
             </div>
           </Document>

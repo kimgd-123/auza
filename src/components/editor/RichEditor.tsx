@@ -154,6 +154,25 @@ export default function RichEditor({ blockId, content, onUpdate, isActive }: Pro
     return () => window.removeEventListener('auza:insertHtml', handler)
   }, [editor, blockId])
 
+  // 커서 위치에 HTML 삽입 이벤트 (이미지 크롭 등)
+  useEffect(() => {
+    if (!editor) return
+
+    const handler = (e: Event) => {
+      const { blockId: targetId, html } = (e as CustomEvent).detail
+      if (targetId !== blockId) return
+      try {
+        editor.commands.insertContent(html, { parseOptions: { preserveWhitespace: false } })
+        onUpdateRef.current(JSON.stringify(editor.getJSON()))
+      } catch (err) {
+        console.warn('[RichEditor] insertContent failed:', err)
+      }
+    }
+
+    window.addEventListener('auza:insertAtCursor', handler)
+    return () => window.removeEventListener('auza:insertAtCursor', handler)
+  }, [editor, blockId])
+
   if (!editor) return null
 
   return (
