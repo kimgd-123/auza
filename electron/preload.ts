@@ -32,6 +32,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fixEquationWidth: (payload: { filePath: string; outputPath?: string; delay?: number; limit?: number }) =>
     ipcRenderer.invoke('hwp:fixEquationWidth', payload) as Promise<{ success: boolean; data: unknown; error: string | null }>,
 
+  // Gemini 자료 생성 (Phase 10)
+  geminiGenerate: (payload: {
+    context: string; presetId: string; presetSystemPrompt: string;
+    outputSchema: string; outputExample: string; userInstruction: string
+  }) =>
+    ipcRenderer.invoke('gemini:generate', payload) as Promise<{
+      ir: Record<string, unknown> | null; rawText?: string; error: string | null
+    }>,
+
+  // Generation IR → HWP 직접 작성
+  writeHwpFromIR: (payload: {
+    irJson: Record<string, unknown>;
+    mathMappings: Record<string, string>;
+    assets: Record<string, string>
+  }) =>
+    ipcRenderer.invoke('hwp:writeFromIR', payload) as Promise<{
+      success: boolean; data: unknown; error: string | null
+    }>,
+
   // 세션 복구 시 PDF allowlist 등록
   allowPdf: (filePath: string) =>
     ipcRenderer.invoke('session:allowPdf', filePath) as Promise<{ success: boolean; error?: string }>,

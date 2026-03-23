@@ -172,15 +172,21 @@ ipcMain.handle(
 
       // 시스템 프롬프트 + 컨텍스트 구성
       const systemParts: string[] = [
-        '당신은 문서 작성을 돕는 AI 어시스턴트입니다.',
-        '사용자가 요청하면 텍스트를 수정하거나, 표를 생성/편집하거나, 내용을 요약할 수 있습니다.',
+        '당신은 교수학습자료 작성을 돕는 AI 어시스턴트입니다.',
+        '사용자가 요청하면 텍스트를 수정하거나, 표를 생성/편집하거나, 내용을 요약하거나, 학습자료를 생성할 수 있습니다.',
         '응답은 HTML 형식으로 해주세요. 표는 <table> 태그를, 수식은 $...$ 또는 $$...$$ 형식을 사용하세요.',
         '절대 <html>, <head>, <body>, <!DOCTYPE> 태그를 포함하지 마세요. 본문 콘텐츠만 반환하세요.',
         '표를 만들 때 <thead>, <tbody>를 사용하지 말고 <table> 안에 <tr>과 <th>/<td>만 사용하세요.',
         'HTML만 반환하고 마크다운 코드블록(```)으로 감싸지 마세요.',
+        '',
+        '## 컨텍스트 구조',
+        '아래에 "블록 목록"(요약)과 "선택된 블록 상세"(Markdown 전문)가 제공됩니다.',
+        '- 블록 이름 옆 *가 붙은 항목이 사용자가 선택한 블록입니다.',
+        '- [asset:ID] 형태의 참조는 이미지를 의미합니다. 이미지 내용을 직접 볼 수 없으니 문맥으로 판단하세요.',
+        '- 사용자가 "이 내용"이라고 하면 선택된 블록 전체를 참조하세요.',
       ]
       if (payload.context) {
-        systemParts.push(`\n현재 에디터 블록 내용:\n${payload.context}`)
+        systemParts.push(`\n---\n${payload.context}`)
       }
 
       // Gemini chat history 구성
@@ -201,6 +207,101 @@ ipcMain.handle(
       return { text: text || null, error: text ? null : '응답이 비어 있습니다.' }
     } catch (err) {
       return { text: null, error: (err as Error).message }
+    }
+  },
+)
+
+// IPC: Gemini 자료 생성 — 프리셋 기반 schema-validated JSON 출력 (Phase 10)
+ipcMain.handle(
+  'gemini:generate',
+  async (
+    _event,
+    payload: {
+      context: string          // 2계층 컨텍스트 (buildContext 결과)
+      presetId: string         // 프리셋 ID
+      presetSystemPrompt: string  // 프리셋 시스템 프롬프트
+      outputSchema: string     // JSON 스키마 설명
+      outputExample: string    // 출력 예시
+      userInstruction: string  // 사용자 지시
+    },
+  ) => {
+    try {
+      const apiKey = await loadGeminiApiKey()
+      if (!apiKey) {
+        return { ir: null, error: 'Gemini API 키가 설정되지 않았습니다.' }
+      }
+
+      const genAI = new GoogleGenerativeAI(apiKey)
+      const model = genAI.getGenerativeModel({ model: 'gemini-3.1-pro-preview' })
+
+      // PRD §13.6.2 생성 프롬프트 계약
+      const systemPrompt = [
+        payload.presetSystemPrompt,
+        '',
+        '## 출력 JSON 스키마',
+        payload.outputSchema,
+        '',
+        '## 출력 예시',
+        payload.outputExample,
+        '',
+        '## 컨텍스트 (선택 블록 내용)',
+        payload.context,
+      ].join('\n')
+
+      const chat = model.startChat({
+        systemInstruction: { role: 'system' as const, parts: [{ text: systemPrompt }] },
+      })
+
+      const result = await chat.sendMessage(payload.userInstruction)
+      let text = result.response.text()
+
+      if (!text) {
+        return { ir: null, error: '생성 결과가 비어 있습니다.' }
+      }
+
+      // JSON 코드블록 래퍼 제거
+      text = text.trim()
+      if (text.startsWith('```json')) text = text.slice(7)
+      else if (text.startsWith('```')) text = text.slice(3)
+      if (text.endsWith('```')) text = text.slice(0, -3)
+      text = text.trim()
+
+      // JSON 파싱 검증
+      let ir
+      try {
+        ir = JSON.parse(text)
+      } catch {
+        return { ir: null, rawText: text, error: 'Gemini 출력이 유효한 JSON이 아닙니다.' }
+      }
+
+      // 기본 스키마 검증
+      if (!ir.type || !ir.sections) {
+        return { ir: null, rawText: text, error: 'Generation IR 스키마가 올바르지 않습니다 (type, sections 필수).' }
+      }
+
+      return { ir, error: null }
+    } catch (err) {
+      return { ir: null, error: (err as Error).message }
+    }
+  },
+)
+
+// IPC: Generation IR → HWP 직접 작성 (Python 백엔드 경유)
+ipcMain.handle(
+  'hwp:writeFromIR',
+  async (
+    _event,
+    payload: {
+      irJson: Record<string, unknown>
+      mathMappings: Record<string, string>
+      assets: Record<string, string>  // {asset_id: base64}
+    },
+  ) => {
+    const result = await sendPythonCommand('write_hwp_from_ir', payload)
+    return {
+      success: result.success,
+      data: result.data,
+      error: result.error,
     }
   },
 )

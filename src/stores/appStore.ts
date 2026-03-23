@@ -14,7 +14,7 @@ interface AppState {
   // 에디터 블록
   blocks: EditorBlock[]
   activeBlockId: string | null
-  addBlock: () => void
+  addBlock: (afterBlockId?: string) => void
   removeBlock: (id: string) => void
   updateBlock: (id: string, updates: Partial<EditorBlock>) => void
   setActiveBlockId: (id: string | null) => void
@@ -58,6 +58,23 @@ interface AppState {
   hwpExportError: string | null
   setHwpExporting: (exporting: boolean) => void
   setHwpExportError: (error: string | null) => void
+
+  // 블록 선택 (컨텍스트 엔진)
+  selectedBlockIds: Set<string>
+  toggleBlockSelection: (id: string) => void
+  selectAllBlocks: () => void
+  deselectAllBlocks: () => void
+
+  // 생성 블록 대기 HTML (mount 전 이벤트 유실 방지)
+  pendingBlockHtml: Record<string, string>
+  setPendingBlockHtml: (blockId: string, html: string) => void
+  consumePendingBlockHtml: (blockId: string) => string | null
+
+  // 블록 접기/펴기
+  collapsedBlockIds: Set<string>
+  toggleBlockCollapse: (id: string) => void
+  collapseAllBlocks: () => void
+  expandAllBlocks: () => void
 }
 
 // 빈 ProseMirror JSON (빈 문단 1개)
@@ -72,7 +89,7 @@ function generateBlockId(): string {
   return `block-${Date.now()}-${blockCounter}`
 }
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   // PDF
   pdfPath: null,
   currentPage: 1,
@@ -84,7 +101,7 @@ export const useAppStore = create<AppState>((set) => ({
   // 에디터 블록
   blocks: [],
   activeBlockId: null,
-  addBlock: () =>
+  addBlock: (afterBlockId?: string) =>
     set((state) => {
       const newBlock: EditorBlock = {
         id: generateBlockId(),
@@ -92,15 +109,27 @@ export const useAppStore = create<AppState>((set) => ({
         content: EMPTY_PROSEMIRROR_JSON,
         createdAt: Date.now(),
       }
+      if (afterBlockId) {
+        const idx = state.blocks.findIndex((b) => b.id === afterBlockId)
+        if (idx !== -1) {
+          const blocks = [...state.blocks]
+          blocks.splice(idx + 1, 0, newBlock)
+          return { blocks }
+        }
+      }
       return { blocks: [...state.blocks, newBlock] }
     }),
   removeBlock: (id) =>
     set((state) => {
       const { [id]: _, ...remainingHistories } = state.chatHistories
+      // selectedBlockIds에서도 삭제된 블록 제거
+      const nextSelected = new Set(state.selectedBlockIds)
+      nextSelected.delete(id)
       return {
         blocks: state.blocks.filter((b) => b.id !== id),
         activeBlockId: state.activeBlockId === id ? null : state.activeBlockId,
         chatHistories: remainingHistories,
+        selectedBlockIds: nextSelected,
       }
     }),
   updateBlock: (id, updates) =>
@@ -164,4 +193,57 @@ export const useAppStore = create<AppState>((set) => ({
   hwpExportError: null,
   setHwpExporting: (exporting) => set({ hwpExporting: exporting }),
   setHwpExportError: (error) => set({ hwpExportError: error }),
+
+  // 생성 블록 대기 HTML
+  pendingBlockHtml: {},
+  setPendingBlockHtml: (blockId, html) =>
+    set((state) => ({
+      pendingBlockHtml: { ...state.pendingBlockHtml, [blockId]: html },
+    })),
+  consumePendingBlockHtml: (blockId) => {
+    const html = get().pendingBlockHtml[blockId] || null
+    if (html) {
+      set((state) => {
+        const { [blockId]: _, ...rest } = state.pendingBlockHtml
+        return { pendingBlockHtml: rest }
+      })
+    }
+    return html
+  },
+
+  // 블록 선택
+  selectedBlockIds: new Set<string>(),
+  toggleBlockSelection: (id) =>
+    set((state) => {
+      const next = new Set(state.selectedBlockIds)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return { selectedBlockIds: next }
+    }),
+  selectAllBlocks: () =>
+    set((state) => ({
+      selectedBlockIds: new Set(state.blocks.map((b) => b.id)),
+    })),
+  deselectAllBlocks: () => set({ selectedBlockIds: new Set<string>() }),
+
+  // 블록 접기/펴기
+  collapsedBlockIds: new Set<string>(),
+  toggleBlockCollapse: (id) =>
+    set((state) => {
+      const next = new Set(state.collapsedBlockIds)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return { collapsedBlockIds: next }
+    }),
+  collapseAllBlocks: () =>
+    set((state) => ({
+      collapsedBlockIds: new Set(state.blocks.map((b) => b.id)),
+    })),
+  expandAllBlocks: () => set({ collapsedBlockIds: new Set<string>() }),
 }))

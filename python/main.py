@@ -98,6 +98,30 @@ def handle_command(command: str, payload: dict) -> dict:
 
         return _get_hwp_writer().write(doc, math_mappings=math_mappings)
 
+    elif command == 'write_hwp_from_ir':
+        from parsers.generation_ir_parser import parse_generation_ir
+
+        ir_json = payload.get('irJson', {})
+        math_mappings = payload.get('mathMappings', {})
+        assets = payload.get('assets', {})  # {asset_id: base64}
+
+        doc = parse_generation_ir(ir_json, assets=assets)
+
+        # 수식 HWP 스크립트 매핑 적용
+        for item in doc.items:
+            if item.item_type == 'math_block' and item.math:
+                hwp_script = math_mappings.get(item.math.latex)
+                if hwp_script:
+                    item.math.hwp_script = hwp_script
+            elif item.item_type == 'paragraph' and item.paragraph:
+                for run in item.paragraph.runs:
+                    if run.math:
+                        hwp_script = math_mappings.get(run.math.latex)
+                        if hwp_script:
+                            run.math.hwp_script = hwp_script
+
+        return _get_hwp_writer().write(doc, math_mappings=math_mappings)
+
     elif command == 'fix_equation_width':
         from scripts.fix_equation_width import fix_equation_widths
 

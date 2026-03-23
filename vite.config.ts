@@ -3,17 +3,27 @@ import react from '@vitejs/plugin-react'
 import electron from 'vite-plugin-electron'
 import renderer from 'vite-plugin-electron-renderer'
 import path from 'path'
-import { fileURLToPath } from 'url'
+import { fileURLToPath, URL } from 'url'
+import { createRequire } from 'module'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+const require = createRequire(import.meta.url)
+const pkg = require('./package.json')
+
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins: [
     react(),
     electron([
       {
         entry: 'electron/main.ts',
+        onstart(args) {
+          args.startup()
+        },
         vite: {
           build: {
             outDir: 'dist-electron',

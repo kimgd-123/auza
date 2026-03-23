@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@/stores/appStore'
+import { useAssetStore } from '@/stores/assetStore'
 import type { OdProgress } from '@/types'
 
 const VISION_PROMPT = `이 영역의 콘텐츠를 분석하여 HTML로 구조화해주세요.
@@ -93,7 +94,7 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
   const overlayRef = useRef<HTMLDivElement>(null)
   const [dragRect, setDragRect] = useState<DragRect | null>(null)
   const isDraggingRef = useRef(false)
-  const [lastCapture, setLastCapture] = useState<{ base64: string; blockId: string } | null>(null)
+  const [lastCapture, setLastCapture] = useState<{ base64: string; blockId: string; captureBboxNorm?: number[] } | null>(null)
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
   const [odProgress, setOdProgress] = useState<OdProgress | null>(null)
 
@@ -185,17 +186,34 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
       html = result.html ? stripCodeFences(result.html) : null
       error = result.error
 
-      // PDF 이미지 추출 — OD OFF에서도 이미지를 포함
-      if (html && window.electronAPI.extractPdfImages) {
+      // PDF 이미지 추출 — 캡처 영역과 겹치는 이미지만 필터링 + Asset Store 등록
+      if (html && window.electronAPI.extractPdfImages && captureBboxNorm) {
         const { pdfPath, currentPage } = useAppStore.getState()
         if (pdfPath) {
           try {
             const imgResult = await window.electronAPI.extractPdfImages(pdfPath, currentPage - 1)
             if (imgResult.images && imgResult.images.length > 0) {
-              const imgTags = imgResult.images.map(
-                (img) => `<img src="data:image/png;base64,${img.base64}" alt="PDF 이미지" style="max-width: 100%;" />`
-              ).join('\n')
-              html = imgTags + '\n' + html
+              // 캡처 영역과 겹치는 이미지만 필터 (IoU > 0 = overlap 있음)
+              const overlapping = imgResult.images.filter((img) => {
+                const [ax1, ay1, ax2, ay2] = captureBboxNorm
+                const [bx1, by1, bx2, by2] = img.bbox_norm
+                const ox1 = Math.max(ax1, bx1), oy1 = Math.max(ay1, by1)
+                const ox2 = Math.min(ax2, bx2), oy2 = Math.min(ay2, by2)
+                return ox1 < ox2 && oy1 < oy2 // overlap 존재
+              })
+              if (overlapping.length > 0) {
+                const imgTags = overlapping.map((img) => {
+                  const imgAssetId = useAssetStore.getState().registerAsset({
+                    type: 'image',
+                    base64: img.base64,
+                    alt: 'PDF 이미지',
+                    sourceBlock: targetBlockId,
+                    sourcePage: currentPage,
+                  })
+                  return `<img data-asset-id="${imgAssetId}" src="data:image/png;base64,${img.base64}" alt="PDF 이미지" style="max-width: 100%;" />`
+                }).join('\n')
+                html = imgTags + '\n' + html
+              }
             }
           } catch {
             // 이미지 추출 실패는 무시
@@ -212,6 +230,34 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
       return
     }
     if (!html) return
+
+    // Asset Store에 캡처 스크린샷 등록
+    const { currentPage } = useAppStore.getState()
+    useAssetStore.getState().registerAsset({
+      type: 'capture',
+      base64: captureBase64,
+      alt: '캡처 영역',
+      sourceBlock: targetBlockId,
+      sourcePage: currentPage,
+    })
+
+    // HTML 내 data-asset-id가 없는 이미지에 개별 Asset ID 부여
+    const currentHtml = html
+    html = currentHtml.replace(
+      /<img(?![^>]*data-asset-id)\s([^>]*>)/gi,
+      (_match, rest: string) => {
+        // 이미지 src에서 base64 추출
+        const srcMatch = rest.match(/src="data:image\/[^;]+;base64,([^"]+)"/)
+        const imgAssetId = useAssetStore.getState().registerAsset({
+          type: 'image',
+          base64: srcMatch?.[1] || '',
+          alt: 'Gemini 생성 이미지',
+          sourceBlock: targetBlockId,
+          sourcePage: currentPage,
+        })
+        return `<img data-asset-id="${imgAssetId}" ${rest}`
+      },
+    )
 
     // F2 수정: TipTap insertContent로 HTML 구조 보존 (표/서식/수식)
     // RichEditor가 리스닝하는 커스텀 이벤트 발행
@@ -295,7 +341,7 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
       (y + h) / canvasH,
     ]
 
-    setLastCapture({ base64, blockId: targetBlockId })
+    setLastCapture({ base64, blockId: targetBlockId, captureBboxNorm })
 
     await performCapture(base64, targetBlockId, captureBboxNorm)
   }, [dragRect, pageCanvas, scale, setCaptureError, performCapture])
@@ -303,8 +349,8 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
   // 재시도 핸들러
   const handleRetry = useCallback(async () => {
     if (!lastCapture) return
-    const { base64, blockId } = lastCapture
-    await performCapture(base64, blockId)
+    const { base64, blockId, captureBboxNorm } = lastCapture
+    await performCapture(base64, blockId, captureBboxNorm)
   }, [lastCapture, performCapture])
 
   // 재시도 버튼을 PdfViewer의 에러 배너에서 사용할 수 있도록 window에 등록

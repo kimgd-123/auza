@@ -8,10 +8,28 @@ import { TextStyle } from '@tiptap/extension-text-style'
 import Color from '@tiptap/extension-color'
 import Highlight from '@tiptap/extension-highlight'
 import { Mathematics } from '@tiptap/extension-mathematics'
-import Image from '@tiptap/extension-image'
+import BaseImage from '@tiptap/extension-image'
+
+// Image 확장에 assetId 속성 추가 (Asset Store 연동)
+const Image = BaseImage.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      assetId: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute('data-asset-id'),
+        renderHTML: (attributes: Record<string, unknown>) => {
+          if (!attributes.assetId) return {}
+          return { 'data-asset-id': attributes.assetId }
+        },
+      },
+    }
+  },
+})
 import { FontSize } from '@/lib/tiptap-font-size'
 import { CustomTableCell, CustomTableHeader } from '@/lib/tiptap-table-cell-bg'
 import { useEffect, useRef } from 'react'
+import { useAppStore } from '@/stores/appStore'
 import { normalizeContentForEditor } from '@/lib/content-normalizer'
 import EditorToolbar from './EditorToolbar'
 import 'katex/dist/katex.min.css'
@@ -93,6 +111,21 @@ export default function RichEditor({ blockId, content, onUpdate, isActive }: Pro
       // content가 JSON이 아닌 경우 무시
     }
   }, [content, editor])
+
+  // mount 시 대기 중인 HTML이 있으면 삽입 (생성 블록 레이스 방지)
+  useEffect(() => {
+    if (!editor) return
+    const pendingHtml = useAppStore.getState().consumePendingBlockHtml(blockId)
+    if (pendingHtml) {
+      const safeHtml = normalizeContentForEditor(pendingHtml)
+      try {
+        editor.commands.setContent(safeHtml, true)
+        onUpdateRef.current(JSON.stringify(editor.getJSON()))
+      } catch {
+        // fallback 무시
+      }
+    }
+  }, [editor, blockId])
 
   // AI 응답 HTML 삽입 이벤트 리스닝
   useEffect(() => {

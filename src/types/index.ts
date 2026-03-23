@@ -26,6 +26,19 @@ export interface ElectronAPI {
   writeHwp: (payload: HwpWritePayload) => Promise<HwpWriteResult>
   fixEquationWidth: (payload: { filePath: string; outputPath?: string; delay?: number; limit?: number }) => Promise<HwpWriteResult>
 
+  // Gemini 자료 생성 (Phase 10)
+  geminiGenerate: (payload: {
+    context: string; presetId: string; presetSystemPrompt: string;
+    outputSchema: string; outputExample: string; userInstruction: string
+  }) => Promise<{ ir: Record<string, unknown> | null; rawText?: string; error: string | null }>
+
+  // Generation IR → HWP 직접 작성
+  writeHwpFromIR: (payload: {
+    irJson: Record<string, unknown>;
+    mathMappings: Record<string, string>;
+    assets: Record<string, string>
+  }) => Promise<{ success: boolean; data: unknown; error: string | null }>
+
   // Gemini API 키 설정
   getApiKey: () => Promise<{ key: string; hasKey: boolean }>
   saveApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
@@ -91,6 +104,17 @@ export interface SessionData {
   blocks: EditorBlock[]
   pdfPath: string | null
   savedAt: number
+}
+
+// Asset (이미지 ID 참조 시스템)
+export interface Asset {
+  id: string                    // "IMG_001", "CAP_003"
+  type: 'image' | 'capture' | 'template_analysis'
+  base64: string                // 로컬 전용 — LLM에 전달하지 않음
+  alt: string
+  caption?: string
+  sourceBlock: string           // 해당 블록 ID
+  sourcePage?: number           // PDF 페이지 번호
 }
 
 // 앱 상태
