@@ -229,6 +229,27 @@ export default function ChatPanel() {
     }))
   }, [activeBlockId])
 
+  // AI 응답을 새 블록에 추가
+  const handleApplyToNewBlock = useCallback((messageContent: string) => {
+    if (!activeBlockId) return
+
+    const html = stripCodeFences(messageContent)
+    if (!html) return
+
+    const store = useAppStore.getState()
+    // 현재 활성 블록 뒤에 새 블록 추가
+    store.addBlock(activeBlockId)
+    const newBlocks = useAppStore.getState().blocks
+    const idx = newBlocks.findIndex((b) => b.id === activeBlockId)
+    const newBlock = newBlocks[idx + 1]
+    if (!newBlock) return
+
+    // 새 블록에 제목 설정 + 활성화
+    useAppStore.getState().updateBlock(newBlock.id, { title: '[채팅] AI 응답' })
+    useAppStore.getState().setPendingBlockHtml(newBlock.id, html)
+    useAppStore.getState().setActiveBlockId(newBlock.id)
+  }, [activeBlockId])
+
   return (
     <div className="flex flex-col h-full">
       {/* 헤더 */}
@@ -265,12 +286,20 @@ export default function ChatPanel() {
               >
                 <div className="whitespace-pre-wrap break-words">{msg.content}</div>
                 {msg.role === 'assistant' && !msg.content.includes('생성 완료!') && !msg.content.startsWith('생성 실패:') && (
-                  <button
-                    onClick={() => handleApply(msg.content)}
-                    className="mt-2 text-xs text-blue-600 hover:text-blue-800 font-medium"
-                  >
-                    에디터에 적용
-                  </button>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      onClick={() => handleApply(msg.content)}
+                      className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                    >
+                      에디터에 적용
+                    </button>
+                    <button
+                      onClick={() => handleApplyToNewBlock(msg.content)}
+                      className="text-xs text-green-600 hover:text-green-800 font-medium"
+                    >
+                      새블록에 추가
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
