@@ -44,7 +44,7 @@ export default function StatusBar() {
 
   return (
     <div className="flex items-center h-7 px-4 bg-gray-100 border-t border-gray-200 text-xs text-gray-500 gap-4 flex-shrink-0">
-      <span className="flex items-center gap-1">
+      <span data-tutorial="hwp-connect" className="flex items-center gap-1">
         HWP: {hwpConnected ? (
           <span className="text-green-600 font-medium">연결됨</span>
         ) : (

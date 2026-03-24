@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
 import path from 'path'
 import fs from 'fs/promises'
 import { GoogleGenerativeAI } from '@google/generative-ai'
@@ -40,7 +40,11 @@ function createWindow() {
   })
 }
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  // Electron 기본 메뉴 제거
+  Menu.setApplicationMenu(null)
+  createWindow()
+})
 
 app.on('window-all-closed', () => {
   stopPythonProcess()

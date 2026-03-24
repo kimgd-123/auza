@@ -124,6 +124,7 @@ export default function PdfViewer() {
       {/* 상단 도구바 */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 bg-gray-50 text-sm flex-shrink-0">
         <button
+          data-tutorial="select-tab"
           onClick={() => setTool('select')}
           className={`px-2 py-1 rounded text-xs font-medium ${
             tool === 'select' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -132,6 +133,7 @@ export default function PdfViewer() {
           선택
         </button>
         <button
+          data-tutorial="capture-tab"
           onClick={() => setTool('capture')}
           className={`px-2 py-1 rounded text-xs font-medium ${
             tool === 'capture' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'

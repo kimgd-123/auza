@@ -3,17 +3,26 @@ import { useAppStore } from '@/stores/appStore'
 import { checkHwpConnection, checkHwpCursor, exportToHwp } from '@/lib/export-hwp'
 import LayoutPicker from './LayoutPicker'
 import SettingsDialog from './SettingsDialog'
+import TutorialOverlay, { isTutorialDone, resetTutorial } from './TutorialOverlay'
+import InfoDialog from './InfoDialog'
 
 export default function MenuBar() {
   const { layoutMode, setLayoutMode, hwpExporting, setHwpExporting, setHwpExportError, setHwpConnected } = useAppStore()
   const [showCursorDialog, setShowCursorDialog] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showTutorial, setShowTutorial] = useState(false)
+  const [showInfo, setShowInfo] = useState(false)
   const [eqFixing, setEqFixing] = useState(false)
 
-  // 앱 시작 시 API 키 미설정이면 알럿 + 설정 모달 자동 표시
+  // 앱 시작 시: API 키 확인 + 튜토리얼 자동 표시
   useEffect(() => {
+    // 첫 실행이면 튜토리얼 자동 표시
+    if (!isTutorialDone()) {
+      setShowTutorial(true)
+    }
+    // API 키 미설정 확인 (튜토리얼 완료 후 또는 이미 본 경우)
     window.electronAPI?.getApiKey?.().then((res) => {
-      if (!res.key) {
+      if (!res.key && isTutorialDone()) {
         alert('Gemini API 키가 설정되지 않았습니다.\n설정에서 API 키를 입력해주세요.')
         setShowSettings(true)
       }
@@ -118,6 +127,7 @@ export default function MenuBar() {
         <span className="font-bold text-blue-600 mr-4">AUZA</span>
 
         <button
+          data-tutorial="open-pdf"
           onClick={handleOpenPdf}
           className="px-3 py-1 text-gray-700 hover:bg-gray-100 rounded transition-colors"
         >
@@ -134,6 +144,7 @@ export default function MenuBar() {
         <div className="flex-1" />
 
         <button
+          data-tutorial="settings-button"
           onClick={() => setShowSettings(true)}
           className="px-2 py-1 text-gray-500 hover:bg-gray-100 rounded transition-colors"
           title="설정"
@@ -144,7 +155,29 @@ export default function MenuBar() {
           </svg>
         </button>
 
-        <LayoutPicker current={layoutMode} onChange={setLayoutMode} />
+        <button
+          onClick={() => setShowInfo(true)}
+          className="px-2 py-1 text-gray-500 hover:bg-gray-100 rounded transition-colors"
+          title="사용 안내"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </button>
+
+        <button
+          onClick={() => { resetTutorial(); setShowTutorial(true) }}
+          className="px-2 py-1 text-gray-500 hover:bg-gray-100 rounded transition-colors"
+          title="튜토리얼"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </button>
+
+        <span data-tutorial="layout-picker">
+          <LayoutPicker current={layoutMode} onChange={setLayoutMode} />
+        </span>
 
         {/* 수식너비 버튼 — HWP 자체 수식 너비가 충분하므로 비활성화
         <button
@@ -162,6 +195,7 @@ export default function MenuBar() {
         */}
 
         <button
+          data-tutorial="hwp-button"
           onClick={handleExportHwp}
           disabled={hwpBusy}
           className={`px-3 py-1 rounded transition-colors ${
@@ -175,6 +209,22 @@ export default function MenuBar() {
       </div>
 
       <SettingsDialog open={showSettings} onClose={() => setShowSettings(false)} />
+
+      <TutorialOverlay
+        open={showTutorial}
+        onClose={() => {
+          setShowTutorial(false)
+          // 튜토리얼 완료 후 API 키 미설정이면 설정 모달 표시
+          window.electronAPI?.getApiKey?.().then((res) => {
+            if (!res.key) {
+              alert('Gemini API 키가 설정되지 않았습니다.\n설정에서 API 키를 입력해주세요.')
+              setShowSettings(true)
+            }
+          })
+        }}
+      />
+
+      <InfoDialog open={showInfo} onClose={() => setShowInfo(false)} />
 
       {/* 커서 위치 확인 다이얼로그 (PRD §4.6.1) */}
       {showCursorDialog && (
