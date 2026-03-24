@@ -583,7 +583,10 @@ class HwpWriter(BaseWriter):
             time.sleep(0.2)
 
             try:
-                hwp.HAction.Run("MoveLeft")
+                # 단락 분리 후 선택: 인접 인라인 이미지 간 MoveLeft 오선택 방지
+                hwp.HAction.Run("BreakPara")   # 이미지 뒤에 빈 단락 삽입
+                hwp.HAction.Run("MoveLeft")    # 빈 단락 → 이미지 단락으로 이동
+                hwp.HAction.Run("MoveLeft")    # 이미지 앞으로 이동
                 hwp.HAction.Run("SelectCtrlFront")
                 time.sleep(0.1)
                 ctrl = hwp.CurSelectedCtrl
@@ -599,13 +602,18 @@ class HwpWriter(BaseWriter):
                         props.SetItem("Height", new_h)
                         sys.stderr.write(f"[hwp-writer] COM image resized: "
                                          f"{cur_w}x{cur_h} → {target_w_hwpunit}x{new_h} HWPUNIT\n")
+                    else:
+                        sys.stderr.write(f"[hwp-writer] COM image already at target width\n")
                     # 글자처럼 취급 설정
                     props.SetItem("TreatAsChar", 1)
                     ctrl.Properties = props
                     sys.stderr.write("[hwp-writer] image TreatAsChar=1\n")
                     hwp.HAction.Run("Cancel")
-                    # 이미지 뒤로 커서 이동
-                    hwp.HAction.Run("MoveRight")
+                else:
+                    sys.stderr.write("[hwp-writer] WARNING: CurSelectedCtrl is None\n")
+                # 이미지+빈단락 뒤로 커서 이동
+                hwp.HAction.Run("MoveLineEnd")
+                hwp.HAction.Run("MoveRight")
             except Exception as e:
                 sys.stderr.write(f"[hwp-writer] image post-process failed: {e}\n")
                 try:

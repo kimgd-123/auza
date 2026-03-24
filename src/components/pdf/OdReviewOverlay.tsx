@@ -20,7 +20,7 @@ interface Props {
   onCancel: () => void
 }
 
-type DragMode = 'move' | 'resize-nw' | 'resize-ne' | 'resize-sw' | 'resize-se' | null
+type DragMode = 'move' | 'resize-nw' | 'resize-n' | 'resize-ne' | 'resize-e' | 'resize-se' | 'resize-s' | 'resize-sw' | 'resize-w' | null
 
 export default function OdReviewOverlay({
   detections: initialDetections,
@@ -170,6 +170,14 @@ export default function OdReviewOverlay({
           } else if (dragMode === 'resize-se') {
             x2 = Math.max(x1 + 10, Math.min(imgW, x2 + toImage(dx)))
             y2 = Math.max(y1 + 10, Math.min(imgH, y2 + toImage(dy)))
+          } else if (dragMode === 'resize-n') {
+            y1 = Math.max(0, Math.min(y2 - 10, y1 + toImage(dy)))
+          } else if (dragMode === 'resize-s') {
+            y2 = Math.max(y1 + 10, Math.min(imgH, y2 + toImage(dy)))
+          } else if (dragMode === 'resize-e') {
+            x2 = Math.max(x1 + 10, Math.min(imgW, x2 + toImage(dx)))
+          } else if (dragMode === 'resize-w') {
+            x1 = Math.max(0, Math.min(x2 - 10, x1 + toImage(dx)))
           }
 
           return { ...d, box_px: [Math.round(x1), Math.round(y1), Math.round(x2), Math.round(y2)] as [number, number, number, number] }
@@ -233,20 +241,27 @@ export default function OdReviewOverlay({
     setSelectedId(null)
   }, [selectedId])
 
-  // 리사이즈 핸들 렌더링
+  // 리사이즈 핸들 렌더링 — 8방향 (코너 4 + 엣지 4)
   const renderHandles = (detId: string) => {
     const handleSize = 8
+    const edgeW = 16 // 엣지 핸들 폭
     const positions: { mode: DragMode; style: React.CSSProperties }[] = [
-      { mode: 'resize-nw', style: { top: -handleSize/2, left: -handleSize/2, cursor: 'nw-resize' } },
-      { mode: 'resize-ne', style: { top: -handleSize/2, right: -handleSize/2, cursor: 'ne-resize' } },
-      { mode: 'resize-sw', style: { bottom: -handleSize/2, left: -handleSize/2, cursor: 'sw-resize' } },
-      { mode: 'resize-se', style: { bottom: -handleSize/2, right: -handleSize/2, cursor: 'se-resize' } },
+      // 코너 4개
+      { mode: 'resize-nw', style: { top: -handleSize/2, left: -handleSize/2, width: handleSize, height: handleSize, cursor: 'nw-resize' } },
+      { mode: 'resize-ne', style: { top: -handleSize/2, right: -handleSize/2, width: handleSize, height: handleSize, cursor: 'ne-resize' } },
+      { mode: 'resize-sw', style: { bottom: -handleSize/2, left: -handleSize/2, width: handleSize, height: handleSize, cursor: 'sw-resize' } },
+      { mode: 'resize-se', style: { bottom: -handleSize/2, right: -handleSize/2, width: handleSize, height: handleSize, cursor: 'se-resize' } },
+      // 엣지 4개
+      { mode: 'resize-n', style: { top: -handleSize/2, left: '50%', marginLeft: -edgeW/2, width: edgeW, height: handleSize, cursor: 'n-resize' } },
+      { mode: 'resize-s', style: { bottom: -handleSize/2, left: '50%', marginLeft: -edgeW/2, width: edgeW, height: handleSize, cursor: 's-resize' } },
+      { mode: 'resize-e', style: { right: -handleSize/2, top: '50%', marginTop: -edgeW/2, width: handleSize, height: edgeW, cursor: 'e-resize' } },
+      { mode: 'resize-w', style: { left: -handleSize/2, top: '50%', marginTop: -edgeW/2, width: handleSize, height: edgeW, cursor: 'w-resize' } },
     ]
     return positions.map((p) => (
       <div
         key={p.mode}
         className="absolute bg-white border-2 border-gray-700 z-20"
-        style={{ width: handleSize, height: handleSize, ...p.style }}
+        style={{ ...p.style }}
         onMouseDown={(e) => handleMouseDown(e, detId, p.mode)}
       />
     ))

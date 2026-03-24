@@ -288,17 +288,62 @@ def _replace_figure_markers(html: str, img, box_px: list,
 
 def _get_figure_image(img, box_px: list, pdf_path: str, page_num: int,
                       capture_bbox_norm: list, img_w: int, img_h: int) -> str:
-    """figure 영역의 최적 이미지를 반환 — 캡처 크롭 우선 (브라우저 렌더링 품질 활용)
+    """figure 영역의 최적 이미지를 반환 — hybrid 전략
 
-    PDF 래스터 이미지는 PyMuPDF DPI를 올려도 원본 해상도 이상 개선 불가하므로,
-    브라우저(PDF.js)가 렌더링한 캡처 이미지에서 크롭하는 것이 품질이 더 좋다.
+    1) PDF 렌더링(300DPI) 시도 — 벡터 그래픽에 유리
+    2) 캡처 크롭 생성 — 브라우저(PDF.js) 렌더링 품질 활용
+    3) 두 결과의 픽셀 수를 비교하여 더 큰 쪽을 채택
+       (래스터 이미지는 DPI 올려도 원본 해상도 이상 불가 → 캡처 크롭이 이김)
+       (벡터 그래픽은 300DPI 렌더가 훨씬 큼 → PDF 렌더가 이김)
 
     Returns:
         base64 인코딩된 PNG 이미지
     """
-    fig_w = box_px[2] - box_px[0]
-    fig_h = box_px[3] - box_px[1]
-    sys.stderr.write(f"[od-analyzer] figure: 캡처 크롭 {fig_w}x{fig_h}px "
-                     f"(캡처 이미지 {img_w}x{img_h}px)\n")
+    # 1) 캡처 크롭 (항상 생성)
     crop_bytes = crop_region_from_image(img, box_px)
-    return base64.b64encode(crop_bytes).decode("ascii")
+    crop_b64 = base64.b64encode(crop_bytes).decode("ascii")
+    crop_w = box_px[2] - box_px[0]
+    crop_h = box_px[3] - box_px[1]
+    crop_pixels = crop_w * crop_h
+
+    sys.stderr.write(f"[od-analyzer] figure: 캡처 크롭 {crop_w}x{crop_h}px\n")
+
+    # 2) PDF 렌더링 시도
+    if pdf_path and page_num >= 0 and capture_bbox_norm:
+        try:
+            from .pdf_image_extractor import render_page_region
+
+            cap_x1, cap_y1, cap_x2, cap_y2 = capture_bbox_norm
+            cap_w = cap_x2 - cap_x1
+            cap_h = cap_y2 - cap_y1
+
+            fig_norm = [
+                cap_x1 + (box_px[0] / img_w) * cap_w,
+                cap_y1 + (box_px[1] / img_h) * cap_h,
+                cap_x1 + (box_px[2] / img_w) * cap_w,
+                cap_y1 + (box_px[3] / img_h) * cap_h,
+            ]
+
+            rendered = render_page_region(pdf_path, page_num, fig_norm, dpi=300)
+            if rendered:
+                # 렌더 결과 크기 확인
+                from PIL import Image
+                render_bytes = base64.b64decode(rendered)
+                render_img = Image.open(io.BytesIO(render_bytes))
+                render_w, render_h = render_img.size
+                render_pixels = render_w * render_h
+
+                sys.stderr.write(f"[od-analyzer] figure: PDF 300DPI {render_w}x{render_h}px "
+                                 f"vs 캡처 크롭 {crop_w}x{crop_h}px\n")
+
+                # 3) 더 큰 쪽 채택
+                if render_pixels > crop_pixels:
+                    sys.stderr.write(f"[od-analyzer] figure: → PDF 렌더 채택 (벡터)\n")
+                    return rendered
+                else:
+                    sys.stderr.write(f"[od-analyzer] figure: → 캡처 크롭 채택 (래스터)\n")
+                    return crop_b64
+        except Exception as e:
+            sys.stderr.write(f"[od-analyzer] figure: PDF 렌더 실패: {e} → 캡처 크롭 사용\n")
+
+    return crop_b64

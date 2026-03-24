@@ -504,13 +504,6 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
     await performCapture(base64, targetBlockId, captureBboxNorm)
   }, [dragRect, pageCanvas, scale, setCaptureError, performCapture, imgCropMode, odEnabled, odReviewEnabled])
 
-  // 재시도 핸들러
-  const handleRetry = useCallback(async () => {
-    if (!lastCapture) return
-    const { base64, blockId, captureBboxNorm } = lastCapture
-    await performCapture(base64, blockId, captureBboxNorm)
-  }, [lastCapture, performCapture])
-
   // v2.1 OD Review: 편집 완료 → convert 실행
   const handleReviewConfirm = useCallback(async (editedDetections: OdDetection[]) => {
     if (!pendingReview) return
@@ -592,6 +585,18 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
       }))
     }
   }, [pendingReview, setCaptureLoading, setCaptureError])
+
+  // 재시도 핸들러 — review 실패 시 편집본 detections로 convert 재실행
+  const handleRetry = useCallback(async () => {
+    if (pendingReview) {
+      // OD Review 경로: 보존된 편집본 detections로 convert 재호출
+      await handleReviewConfirm(pendingReview.detections)
+      return
+    }
+    if (!lastCapture) return
+    const { base64, blockId, captureBboxNorm } = lastCapture
+    await performCapture(base64, blockId, captureBboxNorm)
+  }, [lastCapture, performCapture, pendingReview, handleReviewConfirm])
 
   // v2.1 OD Review: 취소
   const handleReviewCancel = useCallback(() => {
