@@ -48,6 +48,8 @@ interface AppState {
   // OD 모드
   odEnabled: boolean
   setOdEnabled: (enabled: boolean) => void
+  odReviewEnabled: boolean
+  setOdReviewEnabled: (enabled: boolean) => void
 
   // HWP 연결
   hwpConnected: boolean
@@ -191,6 +193,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   // OD 모드
   odEnabled: false,
   setOdEnabled: (enabled) => set({ odEnabled: enabled }),
+  odReviewEnabled: false,
+  setOdReviewEnabled: (enabled) => set({ odReviewEnabled: enabled }),
 
   // HWP
   hwpConnected: false,

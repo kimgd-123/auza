@@ -16,6 +16,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   analyzeCapture: (imageBase64: string, options?: { pdfPath?: string; pageNum?: number; captureBboxNorm?: number[] }) =>
     ipcRenderer.invoke('capture:analyze', imageBase64, options) as Promise<{ html: string | null; regions: number; error: string | null }>,
 
+  // OD 검출만 (v2.1 OD Review Step)
+  detectRegions: (imageBase64: string) =>
+    ipcRenderer.invoke('capture:detect', imageBase64) as Promise<{ detections: unknown[]; imageWidth: number; imageHeight: number; error: string | null }>,
+
+  // 편집된 detections 기반 변환 (v2.1 OD Review Step)
+  convertRegions: (payload: { imageBase64: string; detections: unknown[]; pdfPath?: string; pageNum?: number; captureBboxNorm?: number[] }) =>
+    ipcRenderer.invoke('capture:convert', payload) as Promise<{ html: string | null; regions: number; error: string | null }>,
+
   // Gemini 채팅
   geminiChat: (payload: { messages: Array<{ role: string; text: string }>; context?: string }) =>
     ipcRenderer.invoke('gemini:chat', payload) as Promise<{ text: string | null; error: string | null }>,

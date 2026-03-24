@@ -17,6 +17,8 @@ export interface ElectronAPI {
   geminiVision: (imageBase64: string, prompt: string) => Promise<VisionResult>
   extractPdfImages: (pdfPath: string, pageNum: number) => Promise<{ images: Array<{ bbox_norm: number[]; base64: string }>; error: string | null }>
   analyzeCapture: (imageBase64: string, options?: { pdfPath?: string; pageNum?: number; captureBboxNorm?: number[] }) => Promise<{ html: string | null; regions: number; error: string | null }>
+  detectRegions: (imageBase64: string) => Promise<OdDetectionResult>
+  convertRegions: (payload: OdConvertPayload) => Promise<{ html: string | null; regions: number; error: string | null }>
   geminiChat: (payload: { messages: Array<{ role: string; text: string }>; context?: string }) => Promise<{ text: string | null; error: string | null }>
 
   // HWP 연동
@@ -61,6 +63,44 @@ export interface OdProgress {
   current: number
   total: number
   detail: string
+}
+
+// OD Review Step (v2.1) — 검출 결과 편집
+export type OdRegionType = 'text' | 'table' | 'figure' | 'formula' | 'abandon'
+
+export interface OdDetection {
+  id: string                    // 클라이언트 UUID (편집 추적용)
+  label: string                 // YOLO 원본 라벨
+  region: OdRegionType          // 매핑된 유형
+  score: number                 // 신뢰도 0-1
+  box_px: [number, number, number, number]  // [x1, y1, x2, y2] 캡처 이미지 좌표
+}
+
+export interface OdDetectionResult {
+  detections: OdDetection[]
+  imageWidth: number
+  imageHeight: number
+  error: string | null
+}
+
+export interface OdConvertPayload {
+  imageBase64: string
+  detections: OdDetection[]
+  pdfPath?: string
+  pageNum?: number
+  captureBboxNorm?: number[]
+}
+
+/** 리뷰 세션 — detect 시점에 생성, source context를 immutable하게 고정 */
+export interface PendingOdReview {
+  imageBase64: string
+  imageWidth: number
+  imageHeight: number
+  pdfPath: string | null
+  pageNum: number               // 0-based
+  captureBboxNorm: number[]
+  blockId: string
+  detections: OdDetection[]     // 편집 가능 (mutable copy)
 }
 
 declare global {

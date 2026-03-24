@@ -354,6 +354,57 @@ ipcMain.handle('capture:analyze', async (_event, imageBase64: string, options?: 
   }
 })
 
+// IPC: OD 검출만 수행 (Gemini 호출 없음) — v2.1 OD Review Step
+ipcMain.handle('capture:detect', async (_event, imageBase64: string) => {
+  try {
+    // cold start (모델 다운로드/로드) 고려하여 atomic 경로와 동일 타임아웃
+    const result = await sendPythonCommand('od_detect', { imageBase64 }, 300_000)
+    if (!result.success || !result.data) {
+      return { detections: [], imageWidth: 0, imageHeight: 0, error: result.error || 'OD 검출 실패' }
+    }
+    const data = result.data as { detections: unknown[]; imageWidth: number; imageHeight: number; error: string | null }
+    return {
+      detections: data.detections || [],
+      imageWidth: data.imageWidth || 0,
+      imageHeight: data.imageHeight || 0,
+      error: data.error || null,
+    }
+  } catch (err) {
+    return { detections: [], imageWidth: 0, imageHeight: 0, error: (err as Error).message }
+  }
+})
+
+// IPC: 사용자 편집된 detections 기반 Gemini 변환 + figure 후처리 — v2.1 OD Review Step
+ipcMain.handle('capture:convert', async (_event, payload: {
+  imageBase64: string; detections: unknown[]; pdfPath?: string; pageNum?: number; captureBboxNorm?: number[]
+}) => {
+  try {
+    const apiKey = await loadGeminiApiKey()
+    if (!apiKey) {
+      return { html: null, regions: 0, error: 'Gemini API 키가 설정되지 않았습니다.' }
+    }
+    const result = await sendPythonCommand('od_convert', {
+      imageBase64: payload.imageBase64,
+      detections: payload.detections,
+      apiKey,
+      pdfPath: payload.pdfPath || '',
+      pageNum: payload.pageNum ?? -1,
+      captureBboxNorm: payload.captureBboxNorm || null,
+    }, 300_000)
+    if (!result.success || !result.data) {
+      return { html: null, regions: 0, error: result.error || '변환에 실패했습니다.' }
+    }
+    const data = result.data as { html: string; regions: number; error: string | null }
+    return {
+      html: data.html || null,
+      regions: data.regions || 0,
+      error: data.error || null,
+    }
+  } catch (err) {
+    return { html: null, regions: 0, error: (err as Error).message }
+  }
+})
+
 // ── HWP 연동 IPC ──
 
 // Python 백엔드 시작 (앱 초기화 시)

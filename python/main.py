@@ -165,6 +165,38 @@ def handle_command(command: str, payload: dict) -> dict:
             capture_bbox_norm=capture_bbox_norm,
         )
 
+    elif command == 'od_detect':
+        from od.analyzer import detect_only
+
+        image_base64 = payload.get('imageBase64', '')
+        if not image_base64:
+            return {"error": "imageBase64가 필요합니다"}
+
+        od_model = _get_od_model()
+        return detect_only(image_base64, od_model)
+
+    elif command == 'od_convert':
+        from od.analyzer import convert_regions
+
+        image_base64 = payload.get('imageBase64', '')
+        detections = payload.get('detections', [])
+        api_key = payload.get('apiKey', '')
+        pdf_path = payload.get('pdfPath', '')
+        page_num = payload.get('pageNum', -1)
+        capture_bbox_norm = payload.get('captureBboxNorm')
+
+        if not image_base64:
+            return {"error": "imageBase64가 필요합니다"}
+        if not api_key:
+            return {"error": "apiKey가 필요합니다"}
+
+        return convert_regions(
+            image_base64, detections, api_key,
+            pdf_path=pdf_path, page_num=page_num,
+            capture_bbox_norm=capture_bbox_norm,
+            trust_labels=True,  # 사용자가 리뷰에서 편집한 유형을 신뢰
+        )
+
     else:
         return {"error": f"Unknown command: {command}"}
 

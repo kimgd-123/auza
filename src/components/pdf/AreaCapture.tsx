@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useAssetStore } from '@/stores/assetStore'
-import type { OdProgress } from '@/types'
+import type { OdProgress, OdDetection, PendingOdReview } from '@/types'
+import OdReviewOverlay from './OdReviewOverlay'
 
 const VISION_PROMPT = `이 영역의 콘텐츠를 분석하여 HTML로 구조화해주세요.
 
@@ -91,7 +92,7 @@ function stripCodeFences(text: string): string {
 }
 
 export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
-  const { captureLoading, setCaptureLoading, setCaptureError, odEnabled, setOdEnabled } = useAppStore()
+  const { captureLoading, setCaptureLoading, setCaptureError, odEnabled, setOdEnabled, odReviewEnabled, setOdReviewEnabled } = useAppStore()
   const overlayRef = useRef<HTMLDivElement>(null)
   const [dragRect, setDragRect] = useState<DragRect | null>(null)
   const isDraggingRef = useRef(false)
@@ -99,6 +100,30 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
   const [odProgress, setOdProgress] = useState<OdProgress | null>(null)
   const [imgCropMode, setImgCropMode] = useState(false)
+
+  // v2.1 OD Review Step
+  const [pendingReview, setPendingReview] = useState<PendingOdReview | null>(null)
+
+  // v2.1 Navigation Lock — 리뷰 중 페이지 변경 시 discard 확인
+  const currentPage = useAppStore((s) => s.currentPage)
+  const prevPageRef = useRef(currentPage)
+  useEffect(() => {
+    if (pendingReview && prevPageRef.current !== currentPage) {
+      const prevPage = prevPageRef.current
+      // ref를 먼저 갱신하여 setCurrentPage 복원 시 re-trigger 방지
+      prevPageRef.current = currentPage
+      const discard = window.confirm('OD 리뷰가 진행 중입니다. 편집 내용을 버리고 이동하시겠습니까?')
+      if (discard) {
+        setPendingReview(null)
+      } else {
+        // 이동 취소 — 이전 페이지로 복원
+        prevPageRef.current = prevPage
+        useAppStore.getState().setCurrentPage(prevPage)
+      }
+    } else {
+      prevPageRef.current = currentPage
+    }
+  }, [currentPage, pendingReview])
 
   // OD 진행 상황 수신
   useEffect(() => {
@@ -311,8 +336,8 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
     const srcW = w * dpr
     const srcH = h * dpr
 
-    // 최소 캡처 해상도 보장 — IMG 크롭: 2000px, OD/일반: 800px
-    const minLongSide = imgCropMode ? 2000 : 800
+    // 최소 캡처 해상도 보장 — OD/IMG 크롭: 2000px, 일반: 800px
+    const minLongSide = (odEnabled || imgCropMode) ? 2000 : 800
     const longSide = Math.max(srcW, srcH)
     let captureScale = longSide < minLongSide ? minLongSide / longSide : 1.0
 
@@ -439,8 +464,45 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
 
     setLastCapture({ base64, blockId: targetBlockId, captureBboxNorm })
 
+    // v2.1 OD Review Step: OD ON + Review ON → detect만 실행 후 리뷰 오버레이 표시
+    if (odEnabled && odReviewEnabled && window.electronAPI.detectRegions) {
+      setCaptureLoading(true)
+      setCaptureError(null)
+      setOdProgress(null)
+
+      const result = await window.electronAPI.detectRegions(base64)
+
+      setCaptureLoading(false)
+      setOdProgress(null)
+
+      if (result.error) {
+        setCaptureError(result.error)
+        return
+      }
+
+      const { pdfPath, currentPage } = useAppStore.getState()
+
+      // 클라이언트 UUID 부여
+      const detections: OdDetection[] = (result.detections as OdDetection[]).map((d, idx) => ({
+        ...d,
+        id: d.id || `od_${Date.now()}_${idx}`,
+      }))
+
+      setPendingReview({
+        imageBase64: base64,
+        imageWidth: result.imageWidth,
+        imageHeight: result.imageHeight,
+        pdfPath: pdfPath || null,
+        pageNum: pdfPath ? currentPage - 1 : 0,
+        captureBboxNorm: captureBboxNorm || [],
+        blockId: targetBlockId,
+        detections,
+      })
+      return
+    }
+
     await performCapture(base64, targetBlockId, captureBboxNorm)
-  }, [dragRect, pageCanvas, scale, setCaptureError, performCapture, imgCropMode])
+  }, [dragRect, pageCanvas, scale, setCaptureError, performCapture, imgCropMode, odEnabled, odReviewEnabled])
 
   // 재시도 핸들러
   const handleRetry = useCallback(async () => {
@@ -448,6 +510,93 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
     const { base64, blockId, captureBboxNorm } = lastCapture
     await performCapture(base64, blockId, captureBboxNorm)
   }, [lastCapture, performCapture])
+
+  // v2.1 OD Review: 편집 완료 → convert 실행
+  const handleReviewConfirm = useCallback(async (editedDetections: OdDetection[]) => {
+    if (!pendingReview) return
+    const review = pendingReview
+    setPendingReview(null)
+
+    // ── 디버그: 전송되는 detections 확인 ──
+    console.warn('[OD Review] 변환 요청:', {
+      총개수: editedDetections.length,
+      원본개수: review.detections.length,
+      regions: editedDetections.map(d => ({ id: d.id, region: d.region, score: d.score })),
+    })
+
+    setCaptureLoading(true)
+    setCaptureError(null)
+    setOdProgress(null)
+
+    const result = await window.electronAPI.convertRegions({
+      imageBase64: review.imageBase64,
+      detections: editedDetections,
+      pdfPath: review.pdfPath || undefined,
+      pageNum: review.pageNum,
+      captureBboxNorm: review.captureBboxNorm,
+    })
+
+    setCaptureLoading(false)
+    setOdProgress(null)
+
+    if (result.error || !result.html) {
+      setCaptureError(result.error || '인식 결과가 비어 있습니다.')
+      // 재시도 시 편집된 detections 보존
+      setPendingReview({ ...review, detections: editedDetections })
+      return
+    }
+
+    let html = stripCodeFences(result.html)
+
+    // Asset Store에 캡처 스크린샷 등록
+    const { currentPage } = useAppStore.getState()
+    useAssetStore.getState().registerAsset({
+      type: 'capture',
+      base64: review.imageBase64,
+      alt: '캡처 영역',
+      sourceBlock: review.blockId,
+      sourcePage: currentPage,
+    })
+
+    // HTML 내 data-asset-id가 없는 이미지에 개별 Asset ID 부여
+    html = html.replace(
+      /<img(?![^>]*data-asset-id)\s([^>]*>)/gi,
+      (_match, rest: string) => {
+        const srcMatch = rest.match(/src="data:image\/[^;]+;base64,([^"]+)"/)
+        const imgAssetId = useAssetStore.getState().registerAsset({
+          type: 'image',
+          base64: srcMatch?.[1] || '',
+          alt: 'OD 생성 이미지',
+          sourceBlock: review.blockId,
+          sourcePage: currentPage,
+        })
+        return `<img data-asset-id="${imgAssetId}" ${rest}`
+      },
+    )
+
+    // 블록 삽입
+    const blockStillExists = useAppStore.getState().blocks.some((b) => b.id === review.blockId)
+    if (!blockStillExists) return
+
+    const { collapsedBlockIds, toggleBlockCollapse } = useAppStore.getState()
+    if (collapsedBlockIds.has(review.blockId)) {
+      toggleBlockCollapse(review.blockId)
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('auza:insertHtml', {
+          detail: { blockId: review.blockId, html },
+        }))
+      }, 100)
+    } else {
+      window.dispatchEvent(new CustomEvent('auza:insertHtml', {
+        detail: { blockId: review.blockId, html },
+      }))
+    }
+  }, [pendingReview, setCaptureLoading, setCaptureError])
+
+  // v2.1 OD Review: 취소
+  const handleReviewCancel = useCallback(() => {
+    setPendingReview(null)
+  }, [])
 
   // 재시도 버튼을 PdfViewer의 에러 배너에서 사용할 수 있도록 window에 등록
   useEffect(() => {
@@ -600,7 +749,31 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
           >
             {odEnabled ? 'OD ON' : 'OD OFF'}
           </button>
+          {odEnabled && (
+            <button
+              className={`text-xs px-2.5 py-1 rounded-full shadow transition-colors cursor-pointer ${
+                odReviewEnabled
+                  ? 'bg-purple-500 text-white'
+                  : 'bg-white/90 text-gray-600 hover:bg-gray-100'
+              }`}
+              onClick={() => setOdReviewEnabled(!odReviewEnabled)}
+              title={odReviewEnabled ? 'OD Review ON — 검출 결과 확인 후 변환' : 'OD Review OFF — 자동 변환'}
+            >
+              {odReviewEnabled ? 'Review ON' : 'Review'}
+            </button>
+          )}
         </div>
+      )}
+
+      {/* v2.1 OD Review Overlay */}
+      {pendingReview && (
+        <OdReviewOverlay
+          detections={pendingReview.detections}
+          captureBase64={pendingReview.imageBase64}
+          captureImageSize={{ w: pendingReview.imageWidth, h: pendingReview.imageHeight }}
+          onConfirm={handleReviewConfirm}
+          onCancel={handleReviewCancel}
+        />
       )}
 
       {captureLoading && (

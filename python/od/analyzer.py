@@ -27,41 +27,8 @@ def _emit_progress(step: str, current: int = 0, total: int = 0, detail: str = ""
     sys.stderr.flush()
 
 
-def analyze_capture(image_base64: str, api_key: str, od_model,
-                    pdf_path: str = None, page_num: int = -1,
-                    capture_bbox_norm: list = None) -> dict:
-    """캡처 이미지를 OD로 분석하고 영역별 Gemini Vision 호출
-
-    Args:
-        image_base64: base64 인코딩된 PNG 이미지
-        api_key: Gemini API 키
-        od_model: 로드된 YOLO 모델
-        pdf_path: PDF 파일 경로 (figure 원본 추출용, 없으면 크롭 fallback)
-        page_num: 0-based 페이지 번호
-        capture_bbox_norm: 캡처 영역의 페이지 내 정규화 좌표 [x1,y1,x2,y2]
-
-    Returns:
-        {"html": str, "regions": int, "error": str|None}
-    """
-    from PIL import Image
-
-    image_bytes = base64.b64decode(image_base64)
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    img_w, img_h = img.size
-
-    # 소형 캡처는 OD 건너뛰고 직접 Gemini 호출
-    if img_w < MIN_OD_SIZE or img_h < MIN_OD_SIZE:
-        sys.stderr.write(f"[od-analyzer] 소형 캡처 ({img_w}x{img_h}), OD 건너뛰기\n")
-        _emit_progress("gemini", detail="소형 캡처 — 직접 인식 중")
-        from .gemini_vision import PROMPT_TEXT
-        html = call_gemini_vision(api_key, image_base64, PROMPT_TEXT)
-        return {"html": html, "regions": 0, "error": None}
-
-    # OD 감지
-    _emit_progress("od", detail="레이아웃 감지 중...")
-    detections = detect_regions_from_image(od_model, image_bytes)
-
-    # abandon 영역 처리: 선지(① ② ③ ④ ⑤) 패턴은 text로 복구
+def _rescue_abandon(detections: list) -> list:
+    """abandon 영역 처리: 넓은 영역(가로세로비 3:1 이상)은 text로 복구, 나머지 제거"""
     rescued = []
     for d in detections:
         if d["region"] == "abandon":
@@ -69,7 +36,6 @@ def analyze_capture(image_base64: str, api_key: str, od_model,
             w = box[2] - box[0]
             h = box[3] - box[1]
             aspect = w / max(h, 1)
-            # 넓고 얇은 영역(가로세로비 3:1 이상)은 선지일 가능성 → text로 복구
             if aspect >= 3.0:
                 sys.stderr.write(f"[od-analyzer] abandon 복구 → text: "
                                  f"aspect={aspect:.1f}, box={box}\n")
@@ -81,30 +47,96 @@ def analyze_capture(image_base64: str, api_key: str, od_model,
                                  f"aspect={aspect:.1f}, box={box}\n")
         else:
             rescued.append(d)
-    detections = rescued
+    return rescued
+
+
+def detect_only(image_base64: str, od_model, emit_done: bool = True) -> dict:
+    """캡처 이미지에서 OD 검출만 수행 (Gemini 호출 없음)
+
+    Args:
+        emit_done: True면 감지 완료 시 done 이벤트 발행 (atomic 경로에서는 False)
+
+    Returns:
+        {"detections": list[dict], "imageWidth": int, "imageHeight": int, "error": str|None}
+        각 detection: {"label": str, "region": str, "score": float, "box_px": [x1,y1,x2,y2]}
+    """
+    from PIL import Image
+
+    image_bytes = base64.b64decode(image_base64)
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    img_w, img_h = img.size
+
+    if img_w < MIN_OD_SIZE or img_h < MIN_OD_SIZE:
+        sys.stderr.write(f"[od-analyzer] 소형 캡처 ({img_w}x{img_h}), OD 건너뛰기\n")
+        return {"detections": [], "imageWidth": img_w, "imageHeight": img_h, "error": None}
+
+    _emit_progress("od", detail="레이아웃 감지 중...")
+    detections = detect_regions_from_image(od_model, image_bytes)
+    detections = _rescue_abandon(detections)
+    detections = sort_regions_reading_order(detections)
+
+    sys.stderr.write(f"[od-analyzer] detect_only: {len(detections)} 영역 감지\n")
+    if emit_done:
+        _emit_progress("done", detail="감지 완료")
+
+    return {
+        "detections": detections,
+        "imageWidth": img_w,
+        "imageHeight": img_h,
+        "error": None,
+    }
+
+
+def convert_regions(image_base64: str, detections: list, api_key: str,
+                    pdf_path: str = None, page_num: int = -1,
+                    capture_bbox_norm: list = None,
+                    trust_labels: bool = False) -> dict:
+    """사용자가 편집한 detections를 기반으로 Gemini Vision 변환 + figure 후처리
+
+    Args:
+        image_base64: base64 인코딩된 PNG 이미지
+        detections: 편집된 검출 결과 리스트 (box_px, region, label, score)
+        api_key: Gemini API 키
+        pdf_path, page_num, capture_bbox_norm: figure PDF 렌더링용
+        trust_labels: True면 사용자가 설정한 유형을 신뢰 (figure→이미지 직접 삽입, Gemini 재판별 생략)
+
+    Returns:
+        {"html": str, "regions": int, "error": str|None}
+    """
+    from PIL import Image
+
+    image_bytes = base64.b64decode(image_base64)
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    img_w, img_h = img.size
+
+    # ── 디버그: 수신된 detections 원본 로깅 ──
+    sys.stderr.write(f"[od-analyzer] convert 호출: trust_labels={trust_labels}, "
+                     f"detections={len(detections)}개\n")
+    for _i, _d in enumerate(detections):
+        sys.stderr.write(f"  [{_i}] region={_d.get('region')}, score={_d.get('score',0)}, "
+                         f"box={_d.get('box_px')}, id={_d.get('id','?')}\n")
+
+    # abandon 필터링 + reading-order 재정렬
+    detections = [d for d in detections if d.get("region") != "abandon"]
+    detections = sort_regions_reading_order(detections)
 
     if not detections:
-        sys.stderr.write("[od-analyzer] OD 감지 없음, 전체 이미지 Gemini 호출\n")
+        sys.stderr.write("[od-analyzer] convert: 영역 없음, 전체 이미지 Gemini 호출\n")
         _emit_progress("gemini", detail="영역 미감지 — 전체 이미지 인식 중")
         from .gemini_vision import PROMPT_TEXT
         html = call_gemini_vision(api_key, image_base64, PROMPT_TEXT)
         return {"html": html, "regions": 0, "error": None}
 
-    # 읽기 순서로 정렬
-    detections = sort_regions_reading_order(detections)
+    sys.stderr.write(f"[od-analyzer] convert: {len(detections)} 영역 변환 시작\n")
 
-    sys.stderr.write(f"[od-analyzer] {len(detections)} 영역 감지: "
-                     f"{[d['region'] for d in detections]}\n")
-
-    # 영역별 처리
     html_parts = []
     errors = []
-
     total = len(detections)
+
     for i, det in enumerate(detections):
         region = det["region"]
         box = det["box_px"]
-        score = det["score"]
+        score = det.get("score", 0)
 
         _emit_progress("region", current=i + 1, total=total,
                        detail=f"{region} 영역 인식 중")
@@ -112,7 +144,33 @@ def analyze_capture(image_base64: str, api_key: str, od_model,
                          f"{region} (score={score}) box={box}\n")
 
         if region == "figure":
-            # Gemini에게 진짜 figure인지 텍스트/수식인지 판별 요청
+            # trust_labels=True (사용자 리뷰 경로): 사용자가 figure로 지정 → Gemini 재판별 없이 이미지 삽입
+            if trust_labels:
+                sys.stderr.write(f"[od-analyzer] 영역 {i+1}: trust_labels=True, "
+                                 f"figure → 이미지 직접 삽입 (Gemini 호출 없음)\n")
+                try:
+                    img_b64 = _get_figure_image(
+                        img, box, pdf_path, page_num, capture_bbox_norm, img_w, img_h
+                    )
+                    html_parts.append(
+                        f'<img src="data:image/png;base64,{img_b64}" '
+                        f'alt="캡처 이미지" style="max-width: 100%;" />'
+                    )
+                except Exception as e:
+                    sys.stderr.write(f"[od-analyzer] 영역 {i+1}: figure 이미지 생성 실패: {e}\n")
+                    # fallback: 크롭 이미지라도 삽입
+                    try:
+                        crop_bytes = crop_region_from_image(img, box)
+                        fb64 = base64.b64encode(crop_bytes).decode("ascii")
+                        html_parts.append(
+                            f'<img src="data:image/png;base64,{fb64}" '
+                            f'alt="캡처 이미지" style="max-width: 100%;" />'
+                        )
+                    except Exception as e2:
+                        errors.append(f"영역 {i+1} figure 이미지 실패: {e2}")
+                continue
+
+            # trust_labels=False (자동 경로): Gemini에게 진짜 figure인지 재판별
             gemini_html = None
             try:
                 crop_bytes = crop_region_from_image(img, box)
@@ -121,7 +179,6 @@ def analyze_capture(image_base64: str, api_key: str, od_model,
             except Exception as e:
                 sys.stderr.write(f"[od-analyzer] figure 판별 실패: {e}\n")
 
-            # Gemini가 [FIGURE]를 반환하면 진짜 이미지, 아니면 텍스트/수식
             is_real_figure = (not gemini_html or
                               gemini_html.strip().upper() == "[FIGURE]")
 
@@ -136,7 +193,6 @@ def analyze_capture(image_base64: str, api_key: str, od_model,
                 )
             else:
                 sys.stderr.write(f"[od-analyzer] 영역 {i+1}: figure→text 재분류 성공\n")
-                # figure→text 재분류된 결과에도 [FIGURE] 마커가 있을 수 있음
                 html_parts.append(_replace_figure_markers(
                     gemini_html, img, box, pdf_path, page_num,
                     capture_bbox_norm, img_w, img_h
@@ -148,7 +204,6 @@ def analyze_capture(image_base64: str, api_key: str, od_model,
                 prompt = get_prompt_for_region(region)
                 result_html = call_gemini_vision(api_key, crop_b64, prompt)
                 if result_html:
-                    # text 영역에서 [FIGURE] 마커 감지 → 이미지로 교체
                     result_html = _replace_figure_markers(
                         result_html, img, box, pdf_path, page_num,
                         capture_bbox_norm, img_w, img_h
@@ -168,6 +223,43 @@ def analyze_capture(image_base64: str, api_key: str, od_model,
         "regions": len(detections),
         "error": "; ".join(errors) if errors else None,
     }
+
+
+def analyze_capture(image_base64: str, api_key: str, od_model,
+                    pdf_path: str = None, page_num: int = -1,
+                    capture_bbox_norm: list = None) -> dict:
+    """캡처 이미지를 OD로 분석하고 영역별 Gemini Vision 호출 (기존 atomic 경로, 하위 호환)
+
+    내부적으로 detect_only() + convert_regions()를 순차 호출합니다.
+    """
+    det_result = detect_only(image_base64, od_model, emit_done=False)
+
+    if det_result.get("error"):
+        return {"html": "", "regions": 0, "error": det_result["error"]}
+
+    detections = det_result["detections"]
+
+    # 소형 캡처 또는 감지 없음 → 전체 이미지 Gemini 호출
+    if not detections:
+        from PIL import Image
+        image_bytes = base64.b64decode(image_base64)
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        img_w, img_h = img.size
+
+        if img_w < MIN_OD_SIZE or img_h < MIN_OD_SIZE:
+            _emit_progress("gemini", detail="소형 캡처 — 직접 인식 중")
+        else:
+            _emit_progress("gemini", detail="영역 미감지 — 전체 이미지 인식 중")
+
+        from .gemini_vision import PROMPT_TEXT
+        html = call_gemini_vision(api_key, image_base64, PROMPT_TEXT)
+        return {"html": html, "regions": 0, "error": None}
+
+    return convert_regions(
+        image_base64, detections, api_key,
+        pdf_path=pdf_path, page_num=page_num,
+        capture_bbox_norm=capture_bbox_norm,
+    )
 
 
 def _replace_figure_markers(html: str, img, box_px: list,
@@ -196,36 +288,17 @@ def _replace_figure_markers(html: str, img, box_px: list,
 
 def _get_figure_image(img, box_px: list, pdf_path: str, page_num: int,
                       capture_bbox_norm: list, img_w: int, img_h: int) -> str:
-    """figure 영역의 최적 이미지를 반환 — PDF 렌더링 우선, 없으면 캡처 크롭
+    """figure 영역의 최적 이미지를 반환 — 캡처 크롭 우선 (브라우저 렌더링 품질 활용)
+
+    PDF 래스터 이미지는 PyMuPDF DPI를 올려도 원본 해상도 이상 개선 불가하므로,
+    브라우저(PDF.js)가 렌더링한 캡처 이미지에서 크롭하는 것이 품질이 더 좋다.
 
     Returns:
         base64 인코딩된 PNG 이미지
     """
-    # PDF 페이지에서 해당 영역을 고해상도로 렌더링 (벡터/래스터 모두 지원)
-    if pdf_path and page_num >= 0 and capture_bbox_norm:
-        try:
-            from .pdf_image_extractor import render_page_region
-
-            # OD box_px → 캡처 영역 내 정규화 → 페이지 전체 정규화 좌표로 변환
-            cap_x1, cap_y1, cap_x2, cap_y2 = capture_bbox_norm
-            cap_w = cap_x2 - cap_x1
-            cap_h = cap_y2 - cap_y1
-
-            fig_norm = [
-                cap_x1 + (box_px[0] / img_w) * cap_w,
-                cap_y1 + (box_px[1] / img_h) * cap_h,
-                cap_x1 + (box_px[2] / img_w) * cap_w,
-                cap_y1 + (box_px[3] / img_h) * cap_h,
-            ]
-
-            rendered = render_page_region(pdf_path, page_num, fig_norm, dpi=300)
-            if rendered:
-                sys.stderr.write("[od-analyzer] figure: PDF 300DPI 렌더링 사용\n")
-                return rendered
-        except Exception as e:
-            sys.stderr.write(f"[od-analyzer] PDF 렌더링 실패: {e}\n")
-
-    # fallback: 캡처에서 크롭
-    sys.stderr.write("[od-analyzer] figure: 캡처 크롭 fallback\n")
+    fig_w = box_px[2] - box_px[0]
+    fig_h = box_px[3] - box_px[1]
+    sys.stderr.write(f"[od-analyzer] figure: 캡처 크롭 {fig_w}x{fig_h}px "
+                     f"(캡처 이미지 {img_w}x{img_h}px)\n")
     crop_bytes = crop_region_from_image(img, box_px)
     return base64.b64encode(crop_bytes).decode("ascii")
