@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { checkHwpConnection, checkHwpCursor, exportToHwp } from '@/lib/export-hwp'
 import LayoutPicker from './LayoutPicker'
@@ -9,6 +9,16 @@ export default function MenuBar() {
   const [showCursorDialog, setShowCursorDialog] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [eqFixing, setEqFixing] = useState(false)
+
+  // 앱 시작 시 API 키 미설정이면 알럿 + 설정 모달 자동 표시
+  useEffect(() => {
+    window.electronAPI?.getApiKey?.().then((res) => {
+      if (!res.key) {
+        alert('Gemini API 키가 설정되지 않았습니다.\n설정에서 API 키를 입력해주세요.')
+        setShowSettings(true)
+      }
+    })
+  }, [])
 
   const handleOpenPdf = async () => {
     if (!window.electronAPI) return

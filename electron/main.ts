@@ -95,7 +95,7 @@ ipcMain.handle('file:readPdf', async (_event, filePath: string) => {
 
 // ── 테스트용 내장 API 키 (정식 릴리즈 시 삭제) ──
 // TODO: 정식 릴리즈 전 아래 줄을 삭제하세요
-const TEST_EMBEDDED_API_KEY = '***REMOVED***'
+const TEST_EMBEDDED_API_KEY = '' // 배포용: 사용자가 설정에서 API 키 입력
 
 // Gemini API 키 로딩: 내장키 → .env.local → %APPDATA%/AUZA-v2/config.json
 async function loadGeminiApiKey(): Promise<string | null> {
