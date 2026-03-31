@@ -157,5 +157,7 @@ def get_prompt_for_region(region: str) -> str:
         return PROMPT_TABLE
     elif region == "formula":
         return PROMPT_FORMULA
+    elif region == "boxed_text":
+        return PROMPT_TEXT  # 테두리는 코드가 후처리로 래핑하므로 텍스트 프롬프트 사용
     else:
         return PROMPT_TEXT

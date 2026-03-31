@@ -66,7 +66,7 @@ export interface OdProgress {
 }
 
 // OD Review Step (v2.1) — 검출 결과 편집
-export type OdRegionType = 'text' | 'table' | 'figure' | 'formula' | 'abandon'
+export type OdRegionType = 'text' | 'table' | 'figure' | 'formula' | 'boxed_text' | 'abandon'
 
 export interface OdDetection {
   id: string                    // 클라이언트 UUID (편집 추적용)

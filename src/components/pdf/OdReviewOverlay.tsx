@@ -6,11 +6,12 @@ const REGION_COLORS: Record<OdRegionType, { border: string; bg: string; label: s
   text:    { border: '#3B82F6', bg: 'rgba(59,130,246,0.15)',  label: 'bg-blue-500' },
   table:   { border: '#10B981', bg: 'rgba(16,185,129,0.15)',  label: 'bg-green-500' },
   figure:  { border: '#8B5CF6', bg: 'rgba(139,92,246,0.15)',  label: 'bg-purple-500' },
-  formula: { border: '#F59E0B', bg: 'rgba(245,158,11,0.15)',  label: 'bg-amber-500' },
-  abandon: { border: '#EF4444', bg: 'rgba(239,68,68,0.10)',   label: 'bg-red-500' },
+  formula:    { border: '#F59E0B', bg: 'rgba(245,158,11,0.15)',  label: 'bg-amber-500' },
+  boxed_text: { border: '#06B6D4', bg: 'rgba(6,182,212,0.15)',  label: 'bg-cyan-500' },
+  abandon:    { border: '#EF4444', bg: 'rgba(239,68,68,0.10)',   label: 'bg-red-500' },
 }
 
-const REGION_TYPES: OdRegionType[] = ['text', 'table', 'figure', 'formula', 'abandon']
+const REGION_TYPES: OdRegionType[] = ['text', 'table', 'figure', 'formula', 'boxed_text', 'abandon']
 
 interface Props {
   detections: OdDetection[]

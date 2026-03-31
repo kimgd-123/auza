@@ -158,6 +158,100 @@ def crop_region_from_image(pil_img, box_px: list, padding: int = 5) -> bytes:
     return buf.getvalue()
 
 
+def reclassify_boxed_text(pil_img, detections: list) -> list:
+    """text 영역 중 글상자(테두리 또는 배경색 차이)가 감지되면 boxed_text로 재분류
+
+    감지 방법 (OR 조건):
+    1. 가장자리 edge 밀도: crop의 상하좌우 가장자리에 직선이 3변 이상 존재
+    2. 배경색 차이: crop 내부 평균 밝기가 페이지 배경(255 근처)보다 현저히 어두움
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return detections
+
+    import sys
+
+    result = []
+    for det in detections:
+        det = dict(det)  # shallow copy
+        if det.get("region") != "text":
+            result.append(det)
+            continue
+
+        box = det["box_px"]
+        x1, y1, x2, y2 = box
+        img_w, img_h = pil_img.size
+
+        # padding 포함 crop
+        pad = 8
+        cx1 = max(0, int(x1) - pad)
+        cy1 = max(0, int(y1) - pad)
+        cx2 = min(img_w, int(x2) + pad)
+        cy2 = min(img_h, int(y2) + pad)
+
+        crop = pil_img.crop((cx1, cy1, cx2, cy2))
+        crop_np = np.array(crop)
+        if crop_np.size == 0:
+            result.append(det)
+            continue
+
+        gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
+        crop_h, crop_w = gray.shape[:2]
+
+        # 너무 작은 영역은 skip
+        if crop_h < 40 or crop_w < 40:
+            result.append(det)
+            continue
+
+        is_boxed = False
+        reason = ""
+
+        # ── 방법 1: 가장자리 edge 밀도 체크 ──
+        strip = max(5, min(crop_h, crop_w) // 20)  # 가장자리 strip 두께
+        edges = cv2.Canny(gray, 30, 100)
+
+        # 상/하/좌/우 가장자리 strip에서 edge 비율 계산
+        top_strip = edges[:strip, :]
+        bot_strip = edges[-strip:, :]
+        left_strip = edges[:, :strip]
+        right_strip = edges[:, -strip:]
+
+        def edge_ratio(strip_img):
+            return np.count_nonzero(strip_img) / max(strip_img.size, 1)
+
+        edge_threshold = 0.15  # 15% 이상 edge가 있으면 테두리 선으로 판단
+        sides_with_border = sum(1 for s in [top_strip, bot_strip, left_strip, right_strip]
+                                if edge_ratio(s) > edge_threshold)
+
+        if sides_with_border >= 3:
+            is_boxed = True
+            reason = f"edge 감지 ({sides_with_border}변)"
+
+        # ── 방법 2: 배경색 차이 ──
+        if not is_boxed:
+            # crop 내부 중앙 영역의 평균 밝기
+            margin = max(strip + 2, 10)
+            if crop_h > margin * 2 and crop_w > margin * 2:
+                inner = gray[margin:-margin, margin:-margin]
+                inner_mean = np.mean(inner)
+                # 페이지 배경은 보통 250+ (흰색), 글상자 배경은 220 이하 (회색)
+                if inner_mean < 235:
+                    is_boxed = True
+                    reason = f"배경색 차이 (밝기={inner_mean:.0f})"
+
+        if is_boxed:
+            det["region"] = "boxed_text"
+            sys.stderr.write(
+                f"[od-detector] 재분류: text → boxed_text ({reason}, box={box})\n"
+            )
+
+        result.append(det)
+
+    return result
+
+
 def sort_regions_reading_order(detections: list) -> list:
     """감지된 영역을 읽기 순서(위→아래, 같은 줄이면 왼→오른)로 정렬
 

@@ -10,7 +10,7 @@ import re
 import json
 import base64
 from .constants import MIN_OD_SIZE
-from .detector import detect_regions_from_image, crop_region_from_image, sort_regions_reading_order
+from .detector import detect_regions_from_image, crop_region_from_image, sort_regions_reading_order, reclassify_boxed_text
 from .gemini_vision import call_gemini_vision, get_prompt_for_region, PROMPT_FIGURE_CHECK
 
 
@@ -73,6 +73,7 @@ def detect_only(image_base64: str, od_model, emit_done: bool = True) -> dict:
     _emit_progress("od", detail="레이아웃 감지 중...")
     detections = detect_regions_from_image(od_model, image_bytes)
     detections = _rescue_abandon(detections)
+    detections = reclassify_boxed_text(img, detections)
     detections = sort_regions_reading_order(detections)
 
     sys.stderr.write(f"[od-analyzer] detect_only: {len(detections)} 영역 감지\n")
@@ -197,6 +198,29 @@ def convert_regions(image_base64: str, detections: list, api_key: str,
                     gemini_html, img, box, pdf_path, page_num,
                     capture_bbox_norm, img_w, img_h
                 ))
+        elif region == "boxed_text":
+            # 글상자: Gemini로 내용 추출 후 border div로 래핑
+            try:
+                crop_bytes = crop_region_from_image(img, box)
+                crop_b64 = base64.b64encode(crop_bytes).decode("ascii")
+                prompt = get_prompt_for_region(region)
+                result_html = call_gemini_vision(api_key, crop_b64, prompt)
+                if result_html:
+                    result_html = _replace_figure_markers(
+                        result_html, img, box, pdf_path, page_num,
+                        capture_bbox_norm, img_w, img_h
+                    )
+                    result_html = (
+                        '<table style="border: 1px solid #000; width: 100%; border-collapse: collapse;">'
+                        '<tr><td style="padding: 8px;">'
+                        + result_html
+                        + '</td></tr></table>'
+                    )
+                    html_parts.append(result_html)
+            except Exception as e:
+                err_msg = f"영역 {i+1} ({region}) 처리 실패: {e}"
+                sys.stderr.write(f"[od-analyzer] {err_msg}\n")
+                errors.append(err_msg)
         else:
             try:
                 crop_bytes = crop_region_from_image(img, box)
