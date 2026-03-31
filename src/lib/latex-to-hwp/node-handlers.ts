@@ -11,6 +11,8 @@ const UNICODE_TO_HWP: Record<string, string> = {
   '∈': 'in', '∋': 'ni', '∉': 'notin', '⊥': 'perp', '∥': 'parallel',
   '∅': 'emptyset', '∞': 'inf', '∀': 'forall', '∃': 'exists',
   '∠': 'angle', '△': 'triangle', '∴': 'therefore', '∵': 'because',
+  '□': 'square', '◇': 'diamond', '◯': 'bigcirc', '⬠': 'bigcirc',
+  '○': 'bigcirc', '●': 'bullet', '★': 'star', '☆': 'star',
 }
 
 export interface KaTeXNode {
@@ -47,6 +49,7 @@ export const NODE_HANDLERS: Record<string, NodeHandler> = {
       if (/^[a-zA-Z]/.test(sym)) return ` ${sym} `
       return sym
     }
+    if (UNICODE_TO_HWP[text]) return ` ${UNICODE_TO_HWP[text]} `
     return text
   },
 

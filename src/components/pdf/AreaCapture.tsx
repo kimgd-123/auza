@@ -567,6 +567,17 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
       },
     )
 
+    // OD 결과를 블록에 저장 (재편집용)
+    useAppStore.getState().saveOdData(review.blockId, {
+      imageBase64: review.imageBase64,
+      imageWidth: review.imageWidth,
+      imageHeight: review.imageHeight,
+      pdfPath: review.pdfPath,
+      pageNum: review.pageNum,
+      captureBboxNorm: review.captureBboxNorm,
+      detections: editedDetections,
+    })
+
     // 블록 삽입
     const blockStillExists = useAppStore.getState().blocks.some((b) => b.id === review.blockId)
     if (!blockStillExists) return

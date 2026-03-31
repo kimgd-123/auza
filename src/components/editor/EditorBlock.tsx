@@ -17,6 +17,7 @@ interface Props {
 export default function EditorBlock({ block, index, collapsed, onToggleCollapse, onDragStart, onDragOver, onDrop }: Props) {
   const { activeBlockId, setActiveBlockId, updateBlock, removeBlock } = useAppStore()
   const isActive = activeBlockId === block.id
+  const hasOdData = useAppStore((s) => !!s.savedOdData[block.id])
   const [isDraggable, setIsDraggable] = useState(false)
   const [hwpWriting, setHwpWriting] = useState(false)
   const blockRef = useRef<HTMLDivElement>(null)
@@ -110,6 +111,18 @@ export default function EditorBlock({ block, index, collapsed, onToggleCollapse,
           placeholder="블록 제목 (선택)"
           className="flex-1 text-sm bg-transparent outline-none text-gray-700 placeholder:text-gray-300"
         />
+        {hasOdData && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              useAppStore.getState().setReReviewBlockId(block.id)
+            }}
+            className="ml-2 px-2 py-0.5 text-xs rounded bg-orange-500 text-white hover:bg-orange-600 transition-colors"
+            title="OD 검출 결과 재편집 및 AI 재변환"
+          >
+            OD
+          </button>
+        )}
         <button
           onClick={handleWriteHwp}
           disabled={hwpWriting}

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ChatMessage, EditorBlock, PanelSizes } from '@/types'
+import type { ChatMessage, EditorBlock, PanelSizes, SavedOdData } from '@/types'
 import type { LayoutMode } from '@/components/layout/LayoutPicker'
 
 interface AppState {
@@ -50,6 +50,15 @@ interface AppState {
   setOdEnabled: (enabled: boolean) => void
   odReviewEnabled: boolean
   setOdReviewEnabled: (enabled: boolean) => void
+
+  // OD 결과 저장 (블록별 재편집용)
+  savedOdData: Record<string, SavedOdData>
+  saveOdData: (blockId: string, data: SavedOdData) => void
+  clearOdData: (blockId: string) => void
+
+  // OD 재편집 모달
+  reReviewBlockId: string | null
+  setReReviewBlockId: (blockId: string | null) => void
 
   // HWP 연결
   hwpConnected: boolean
@@ -129,6 +138,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const nextCollapsed = new Set(state.collapsedBlockIds)
       nextCollapsed.delete(id)
       const { [id]: _p, ...remainingPending } = state.pendingBlockHtml
+      const { [id]: _od, ...remainingOdData } = state.savedOdData
       // Asset Store 정리 (별도 store이므로 side-effect로 호출)
       import('@/stores/assetStore').then(({ useAssetStore }) => {
         useAssetStore.getState().removeAssetsByBlock(id)
@@ -140,6 +150,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         selectedBlockIds: nextSelected,
         collapsedBlockIds: nextCollapsed,
         pendingBlockHtml: remainingPending,
+        savedOdData: remainingOdData,
+        reReviewBlockId: state.reReviewBlockId === id ? null : state.reReviewBlockId,
       }
     }),
   updateBlock: (id, updates) =>
@@ -195,6 +207,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   setOdEnabled: (enabled) => set({ odEnabled: enabled }),
   odReviewEnabled: false,
   setOdReviewEnabled: (enabled) => set({ odReviewEnabled: enabled }),
+
+  // OD 결과 저장
+  savedOdData: {},
+  saveOdData: (blockId, data) =>
+    set((state) => ({
+      savedOdData: { ...state.savedOdData, [blockId]: data },
+    })),
+  clearOdData: (blockId) =>
+    set((state) => {
+      const { [blockId]: _, ...rest } = state.savedOdData
+      return { savedOdData: rest }
+    }),
+
+  // OD 재편집 모달
+  reReviewBlockId: null,
+  setReReviewBlockId: (blockId) => set({ reReviewBlockId: blockId }),
 
   // HWP
   hwpConnected: false,

@@ -103,6 +103,17 @@ export interface PendingOdReview {
   detections: OdDetection[]     // 편집 가능 (mutable copy)
 }
 
+/** 블록별 저장된 OD 결과 — 재편집 및 AI 재변환용 */
+export interface SavedOdData {
+  imageBase64: string
+  imageWidth: number
+  imageHeight: number
+  pdfPath: string | null
+  pageNum: number
+  captureBboxNorm: number[]
+  detections: OdDetection[]
+}
+
 declare global {
   interface Window {
     electronAPI: ElectronAPI

@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import MainLayout from './components/layout/MainLayout'
+import OdReReviewModal from './components/editor/OdReReviewModal'
 import { useSessionAutoSave, useSessionRecovery } from './lib/use-session'
 import { useAppStore } from './stores/appStore'
 
@@ -94,6 +95,7 @@ function App() {
     <AutoSaveProvider>
       <SessionRecoveryDialog />
       <MainLayout />
+      <OdReReviewModal />
     </AutoSaveProvider>
   )
 }
