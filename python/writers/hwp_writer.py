@@ -291,25 +291,32 @@ class HwpWriter(BaseWriter):
             return
 
         # 서식 설정
-        act = hwp.CreateAction("CharShape")
-        pset = act.CreateSet()
-        act.GetDefault(pset)
+        has_style = run.bold or run.italic or run.underline or run.color or run.font_size
+        if has_style:
+            try:
+                act = hwp.CreateAction("CharShape")
+                pset = act.CreateSet()
+                act.GetDefault(pset)
+                if pset is None:
+                    raise RuntimeError("CreateSet returned None")
 
-        if run.bold:
-            pset.SetItem("Bold", 1)
-        if run.italic:
-            pset.SetItem("Italic", 1)
-        if run.underline:
-            pset.SetItem("UnderlineType", 1)
-        if run.color:
-            rgb = hex_to_rgb_int(run.color)
-            if rgb is not None:
-                pset.SetItem("TextColor", rgb)
-        if run.font_size:
-            # HWP 폰트 크기: pt × 100
-            pset.SetItem("Height", run.font_size * 100)
+                if run.bold:
+                    pset.SetItem("Bold", 1)
+                if run.italic:
+                    pset.SetItem("Italic", 1)
+                if run.underline:
+                    pset.SetItem("UnderlineType", 1)
+                if run.color:
+                    rgb = hex_to_rgb_int(run.color)
+                    if rgb is not None:
+                        pset.SetItem("TextColor", rgb)
+                if run.font_size:
+                    # HWP 폰트 크기: pt × 100
+                    pset.SetItem("Height", run.font_size * 100)
 
-        act.Execute(pset)
+                act.Execute(pset)
+            except Exception as e:
+                sys.stderr.write(f"[hwp-writer] CharShape failed: {e}, inserting text without style\n")
 
         # 텍스트 삽입
         hwp.HAction.GetDefault("InsertText", hwp.HParameterSet.HInsertText.HSet)
@@ -461,17 +468,20 @@ class HwpWriter(BaseWriter):
                         except Exception:
                             pass
 
-                    # 셀 내용 (줄바꿈 태그 → \n 변환 후 HTML 태그 제거)
-                    content = _html_to_lines(cell_data.content)
-                    if content:
-                        if cell_data.bold:
-                            act = hwp.CreateAction("CharShape")
-                            pset = act.CreateSet()
-                            act.GetDefault(pset)
-                            pset.SetItem("Bold", 1)
-                            act.Execute(pset)
+                    # 셀 내용: 중첩 테이블이 있으면 재귀 파싱하여 작성
+                    if '<table' in cell_data.content.lower():
+                        self._write_rich_cell(hwp, cell_data)
+                    else:
+                        content = _html_to_lines(cell_data.content)
+                        if content:
+                            if cell_data.bold:
+                                act = hwp.CreateAction("CharShape")
+                                pset = act.CreateSet()
+                                act.GetDefault(pset)
+                                pset.SetItem("Bold", 1)
+                                act.Execute(pset)
 
-                        self._insert_text_with_linebreaks(hwp, content)
+                            self._insert_text_with_linebreaks(hwp, content)
 
                 # 다음 셀로 이동 (마지막 셀 제외)
                 is_last = (row_idx == row_count - 1 and col_idx == col_count - 1)
@@ -488,11 +498,22 @@ class HwpWriter(BaseWriter):
             except Exception as e:
                 sys.stderr.write(f"[hwp-writer] merge ({r},{c}) FAILED: {e}\n")
 
-        # 표 밖으로 나가기
-        act = hwp.CreateAction("TableLowerCell")
-        act.Run()
-        act = hwp.CreateAction("MoveDown")
-        act.Run()
+        # 표 밖으로 나가기 — 커서를 확실히 표 밖으로 이동
+        try:
+            act = hwp.CreateAction("TableLowerCell")
+            act.Run()
+        except Exception:
+            pass
+        try:
+            act = hwp.CreateAction("MoveDown")
+            act.Run()
+        except Exception:
+            pass
+        # 추가 안전장치: 새 문단을 삽입하여 표 밖 커서 위치 확보
+        try:
+            hwp.HAction.Run("BreakPara")
+        except Exception:
+            pass
 
     def _merge_cells(self, hwp, row: int, col: int, rowspan: int, colspan: int,
                      base_list: int = 0, total_cols: int = 1):
@@ -537,6 +558,31 @@ class HwpWriter(BaseWriter):
             hwp.HAction.GetDefault("InsertText", hwp.HParameterSet.HInsertText.HSet)
             hwp.HParameterSet.HInsertText.Text = remaining
             hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
+
+    def _write_rich_cell(self, hwp, cell_data):
+        """중첩 테이블이 포함된 셀 내용을 재귀 파싱하여 HWP에 작성
+
+        1×1 래퍼 테이블(boxed_text)의 셀에 텍스트+표+수식이 혼합된 경우,
+        HTML을 DocumentStructure로 파싱하고 각 아이템을 순차 작성합니다.
+        HWP 테이블 셀 안에 중첩 테이블을 생성하는 것이 가능합니다.
+        """
+        from parsers.html_parser import parse_html
+
+        inner_doc = parse_html(cell_data.content)
+        sys.stderr.write(f"[hwp-writer] rich cell: {len(inner_doc.items)} items\n")
+
+        for i, item in enumerate(inner_doc.items):
+            try:
+                if item.item_type == 'paragraph' and item.paragraph:
+                    self._write_paragraph(hwp, item.paragraph)
+                elif item.item_type == 'table' and item.table:
+                    self._write_table(hwp, item.table)
+                elif item.item_type == 'image' and item.image:
+                    self._write_image(hwp, item.image)
+                elif item.item_type == 'math_block' and item.math:
+                    self._write_equation(hwp, item.math)
+            except Exception as e:
+                sys.stderr.write(f"[hwp-writer] rich cell item {i} error: {e}\n")
 
     def _insert_text_with_linebreaks(self, hwp, content: str):
         """\\n을 HWP BreakPara로 변환하여 줄바꿈 포함 텍스트 삽입"""

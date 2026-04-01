@@ -63,6 +63,48 @@ def parse_html(html: str, title: str = '') -> DocumentStructure:
     return doc
 
 
+def _try_unwrap_wrapper_table(table_el: Tag) -> Optional[List[ContentItem]]:
+    """1×1 래퍼 테이블(boxed_text 등)이면 셀 내용을 재귀 파싱하여 반환.
+
+    래퍼가 아니면 None을 반환하여 일반 테이블 파싱으로 넘긴다.
+    판별 기준: 직속 <tr>이 1개, 그 안에 <td>가 1개, 셀 안에 <table>이 중첩
+    (TipTap을 거치면 border style이 제거되므로 스타일 대신 구조로 판별)
+    """
+    # 직속 tr 수집
+    direct_trs = [c for c in table_el.children
+                  if isinstance(c, Tag) and c.name in ('tr', 'thead', 'tbody', 'tfoot')]
+    # thead/tbody 안의 tr 포함
+    trs = []
+    for el in direct_trs:
+        if el.name == 'tr':
+            trs.append(el)
+        else:
+            trs.extend(c for c in el.children if isinstance(c, Tag) and c.name == 'tr')
+
+    if len(trs) != 1:
+        return None
+
+    tds = [c for c in trs[0].children if isinstance(c, Tag) and c.name in ('td', 'th')]
+    if len(tds) != 1:
+        return None
+
+    # 셀 안에 중첩 테이블 또는 여러 블록 요소가 있는지 확인
+    cell = tds[0]
+    has_nested_table = cell.find('table') is not None
+    block_tags = {'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'blockquote'}
+    block_children = [c for c in cell.children
+                      if isinstance(c, Tag) and c.name in block_tags]
+    has_rich_content = has_nested_table or len(block_children) >= 3
+
+    if not has_rich_content:
+        return None
+
+    # 셀 내부 HTML을 재귀 파싱
+    inner_html = cell.decode_contents()
+    inner_doc = parse_html(inner_html)
+    return inner_doc.items if inner_doc.items else None
+
+
 def _text_to_item(text: str) -> ContentItem:
     """일반 텍스트를 ContentItem으로"""
     # 블록 수식 체크
@@ -201,13 +243,30 @@ def _parse_image(element: Tag) -> Optional[ContentItem]:
 
 
 def _parse_table(element: Tag) -> Optional[ContentItem]:
-    """HTML <table>을 TableData로 변환"""
+    """HTML <table>을 TableData로 변환
+
+    주의: find_all('tr')은 중첩 테이블의 tr까지 포함하므로,
+    직속 자식(thead/tbody/tfoot 한 단계까지)의 tr만 수집합니다.
+    """
     rows: List[List[TableCell]] = []
     max_cols = 0
 
-    for tr in element.find_all('tr'):
+    # 직속 tr만 수집 (thead/tbody/tfoot 내부 포함, 중첩 table 제외)
+    direct_trs: list = []
+    for child in element.children:
+        if not isinstance(child, Tag):
+            continue
+        if child.name == 'tr':
+            direct_trs.append(child)
+        elif child.name in ('thead', 'tbody', 'tfoot'):
+            for sub in child.children:
+                if isinstance(sub, Tag) and sub.name == 'tr':
+                    direct_trs.append(sub)
+
+    for tr in direct_trs:
         cells: List[TableCell] = []
-        for td in tr.find_all(['td', 'th']):
+        # 직속 td/th만 (중첩 테이블의 셀 제외)
+        for td in tr.find_all(['td', 'th'], recursive=False):
             colspan = int(td.get('colspan', 1))
             rowspan = int(td.get('rowspan', 1))
             bg_color = _extract_bg_color(td)
