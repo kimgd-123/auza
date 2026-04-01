@@ -323,8 +323,8 @@ class HwpWriter(BaseWriter):
         hwp.HParameterSet.HInsertText.Text = run.text
         hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
 
-    def _write_table(self, hwp, table: TableData):
-        """표 작성"""
+    def _write_table(self, hwp, table: TableData, nested: bool = False):
+        """표 작성. nested=True이면 다른 표 셀 안에서 호출된 중첩 테이블."""
         row_count = len(table.rows)
         col_count = table.col_count or (max(sum(c.colspan for c in row) for row in table.rows) if table.rows else 1)
 
@@ -498,22 +498,30 @@ class HwpWriter(BaseWriter):
             except Exception as e:
                 sys.stderr.write(f"[hwp-writer] merge ({r},{c}) FAILED: {e}\n")
 
-        # 표 밖으로 나가기 — 커서를 확실히 표 밖으로 이동
-        try:
-            act = hwp.CreateAction("TableLowerCell")
-            act.Run()
-        except Exception:
-            pass
-        try:
-            act = hwp.CreateAction("MoveDown")
-            act.Run()
-        except Exception:
-            pass
-        # 추가 안전장치: 새 문단을 삽입하여 표 밖 커서 위치 확보
-        try:
-            hwp.HAction.Run("BreakPara")
-        except Exception:
-            pass
+        # 표 밖으로 나가기
+        if nested:
+            # 중첩 테이블: 바깥 셀 안에 머물러야 하므로 TableLowerCell+MoveDown만
+            try:
+                act = hwp.CreateAction("TableLowerCell")
+                act.Run()
+                act = hwp.CreateAction("MoveDown")
+                act.Run()
+            except Exception:
+                pass
+        else:
+            # 최외곽 테이블: Cancel(Esc) 2회로 확실히 탈출
+            try:
+                hwp.HAction.Run("Cancel")
+                hwp.HAction.Run("Cancel")
+                hwp.HAction.Run("MoveDown")
+            except Exception:
+                try:
+                    act = hwp.CreateAction("TableLowerCell")
+                    act.Run()
+                    act = hwp.CreateAction("MoveDown")
+                    act.Run()
+                except Exception:
+                    pass
 
     def _merge_cells(self, hwp, row: int, col: int, rowspan: int, colspan: int,
                      base_list: int = 0, total_cols: int = 1):
@@ -576,7 +584,7 @@ class HwpWriter(BaseWriter):
                 if item.item_type == 'paragraph' and item.paragraph:
                     self._write_paragraph(hwp, item.paragraph)
                 elif item.item_type == 'table' and item.table:
-                    self._write_table(hwp, item.table)
+                    self._write_table(hwp, item.table, nested=True)
                 elif item.item_type == 'image' and item.image:
                     self._write_image(hwp, item.image)
                 elif item.item_type == 'math_block' and item.math:
