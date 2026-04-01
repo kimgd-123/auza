@@ -500,7 +500,7 @@ class HwpWriter(BaseWriter):
 
         # 표 밖으로 나가기
         if nested:
-            # 중첩 테이블: 바깥 셀 안에 머물러야 하므로 TableLowerCell+MoveDown만
+            # 중첩 테이블: 바깥 셀 안에 머물러야 하므로 TableLowerCell+MoveDown
             try:
                 act = hwp.CreateAction("TableLowerCell")
                 act.Run()
@@ -509,11 +509,9 @@ class HwpWriter(BaseWriter):
             except Exception:
                 pass
         else:
-            # 최외곽 테이블: Cancel(Esc) 2회로 확실히 탈출
+            # 최외곽 테이블: 문서 끝으로 이동 (블록은 항상 문서 끝에 추가)
             try:
-                hwp.HAction.Run("Cancel")
-                hwp.HAction.Run("Cancel")
-                hwp.HAction.Run("MoveDown")
+                hwp.HAction.Run("MoveDocEnd")
             except Exception:
                 try:
                     act = hwp.CreateAction("TableLowerCell")
