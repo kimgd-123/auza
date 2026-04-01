@@ -16,6 +16,24 @@ from utils.style_utils import hex_to_rgb_int, estimate_text_width_mm, HWPUNIT_PE
 from utils.math_patterns import COMBINED_MATH_RE
 
 
+def _html_to_lines(html: str) -> str:
+    """HTML 줄바꿈 태그를 \\n으로 변환 후 나머지 태그 제거
+
+    주의: <보기>, <보 기> 같은 한국어 꺾쇠 표현은 HTML 태그가 아니므로 보존해야 함.
+    HTML 태그는 영문자 또는 /로 시작하므로 해당 패턴만 매칭합니다.
+    """
+    # HTML 엔티티를 먼저 디코딩 (&lt; → <, &gt; → >)
+    text = html.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+    # 줄바꿈 태그 → \n
+    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</(?:p|div|li|tr)>', '\n', text, flags=re.IGNORECASE)
+    # HTML 태그만 제거 (영문자 또는 /로 시작하는 것만)
+    text = re.sub(r'<[a-zA-Z/!][^>]*>', '', text)
+    # 연속 빈 줄 정리
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 class HwpWriter(BaseWriter):
     def __init__(self):
         self._hwp = None
@@ -309,8 +327,11 @@ class HwpWriter(BaseWriter):
             actual_col = 0
             for cell in row:
                 if actual_col < col_count:
-                    content = re.sub(r'<[^>]+>', '', cell.content).strip()
-                    width_mm = estimate_text_width_mm(content) + 8  # 양쪽 패딩
+                    content = _html_to_lines(cell.content)
+                    # 줄바꿈 있으면 가장 긴 줄 기준으로 폭 계산
+                    lines = content.split('\n') if '\n' in content else [content]
+                    max_line = max(lines, key=lambda l: estimate_text_width_mm(l))
+                    width_mm = estimate_text_width_mm(max_line) + 8  # 양쪽 패딩
                     col_max_mm[actual_col] = max(col_max_mm[actual_col], width_mm)
                 actual_col += cell.colspan
 
@@ -440,8 +461,8 @@ class HwpWriter(BaseWriter):
                         except Exception:
                             pass
 
-                    # 셀 내용 (HTML 태그 제거 후 텍스트+수식 분리 삽입)
-                    content = re.sub(r'<[^>]+>', '', cell_data.content).strip()
+                    # 셀 내용 (줄바꿈 태그 → \n 변환 후 HTML 태그 제거)
+                    content = _html_to_lines(cell_data.content)
                     if content:
                         if cell_data.bold:
                             act = hwp.CreateAction("CharShape")
@@ -450,7 +471,7 @@ class HwpWriter(BaseWriter):
                             pset.SetItem("Bold", 1)
                             act.Execute(pset)
 
-                        self._insert_text_with_math(hwp, content)
+                        self._insert_text_with_linebreaks(hwp, content)
 
                 # 다음 셀로 이동 (마지막 셀 제외)
                 is_last = (row_idx == row_count - 1 and col_idx == col_count - 1)
@@ -516,6 +537,15 @@ class HwpWriter(BaseWriter):
             hwp.HAction.GetDefault("InsertText", hwp.HParameterSet.HInsertText.HSet)
             hwp.HParameterSet.HInsertText.Text = remaining
             hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
+
+    def _insert_text_with_linebreaks(self, hwp, content: str):
+        """\\n을 HWP BreakPara로 변환하여 줄바꿈 포함 텍스트 삽입"""
+        lines = content.split('\n')
+        for i, line in enumerate(lines):
+            if line:
+                self._insert_text_with_math(hwp, line)
+            if i < len(lines) - 1:
+                hwp.HAction.Run("BreakPara")
 
     def _set_cell_bg(self, hwp, hex_color: str):
         """셀 배경색 설정 (TableCellBorderFill)"""

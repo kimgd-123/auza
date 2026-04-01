@@ -6,7 +6,7 @@ interface Props {
 }
 
 export default function InfoDialog({ open, onClose }: Props) {
-  const [tab, setTab] = useState<'usage' | 'capture' | 'shortcuts'>('usage')
+  const [tab, setTab] = useState<'usage' | 'capture' | 'shortcuts' | 'dev'>('usage')
 
   if (!open) return null
 
@@ -28,6 +28,7 @@ export default function InfoDialog({ open, onClose }: Props) {
             { key: 'usage', label: '사용법' },
             { key: 'capture', label: '캡처 모드' },
             { key: 'shortcuts', label: '단축키' },
+            { key: 'dev', label: '개발' },
           ] as const).map(t => (
             <button
               key={t.key}
@@ -46,6 +47,7 @@ export default function InfoDialog({ open, onClose }: Props) {
           {tab === 'usage' && <UsageTab />}
           {tab === 'capture' && <CaptureTab />}
           {tab === 'shortcuts' && <ShortcutsTab />}
+          {tab === 'dev' && <DevTab />}
         </div>
 
         {/* 하단 */}
@@ -169,6 +171,18 @@ function ShortcutsTab() {
         ))}
       </tbody>
     </table>
+  )
+}
+
+function DevTab() {
+  return (
+    <div className="space-y-4">
+      <Section title="오류 문의">
+        <p className="text-xs text-gray-600">
+          김규동 CP — <a href="mailto:kimgd@visang.com" className="text-blue-600 hover:underline">kimgd@visang.com</a>
+        </p>
+      </Section>
+    </div>
   )
 }
 

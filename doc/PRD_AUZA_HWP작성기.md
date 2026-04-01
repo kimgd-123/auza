@@ -234,6 +234,9 @@ latex-normalizer → KaTeX 호환 정규화
 | 복잡한 표 (셀 병합 등) | HTML `<table>` + colspan/rowspan | TipTap Table | TableCreate + MergeTableCells |
 | 혼합 (텍스트 + 수식) | HTML + 인라인 LaTeX | HTML + KaTeX 인라인 | InsertText + EquEdit 혼합 |
 | 다단 레이아웃 | 구조화된 HTML | TipTap 블록 | 순차 삽입 |
+| 주석/하이라이트 | HTML `<mark>`, `<sup>` 등 | 하이라이트/마커 표시 | 형광펜/위첨자 변환 |
+
+> **주석 처리 방침**: PDF 내 인라인 주석(노란 하이라이트, ①② 마커, 밑줄 강조, 색상 텍스트 등)은 OD 영역 감지가 아닌 **Gemini Vision 프롬프트**로 처리한다. `PROMPT_TEXT`에 시각적 주석 인식 지시를 추가하여 `<mark>`, `<sup>`, `<u>`, `<span style="color:...">` 등의 HTML 마크업으로 변환한다.
 
 #### 4.3.3 수식 지원 범위 (v1 Whitelist + Fallback)
 
