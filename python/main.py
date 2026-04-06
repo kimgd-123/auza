@@ -14,9 +14,36 @@ import sys
 import os
 import json
 import traceback
+import subprocess
 
 # python/ 디렉토리를 sys.path에 추가하여 절대 임포트 지원
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+def _ensure_packages():
+    """필수 패키지 누락 시 자동 설치"""
+    required = {
+        'bs4': 'beautifulsoup4',
+        'win32com': 'pywin32',
+        'PIL': 'Pillow',
+    }
+    missing = []
+    for mod, pkg in required.items():
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(pkg)
+
+    if missing:
+        sys.stderr.write(f"[python] 누락 패키지 설치 중: {', '.join(missing)}\n")
+        subprocess.check_call(
+            [sys.executable, '-m', 'pip', 'install', '--quiet', *missing],
+            stdout=subprocess.DEVNULL,
+        )
+        sys.stderr.write(f"[python] 패키지 설치 완료\n")
+
+
+_ensure_packages()
 
 from utils.config import log
 

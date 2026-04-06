@@ -38,8 +38,35 @@ function getPythonScriptPath(): string {
 }
 
 function findPythonExecutable(): string {
-  // Windows에서 python 경로 탐색
-  return process.platform === 'win32' ? 'python' : 'python3'
+  if (process.platform !== 'win32') return 'python3'
+
+  // Windows: 구체적인 Python 설치 경로를 우선 탐색
+  // (WindowsApps 스텁보다 실제 설치된 Python을 우선)
+  const fs = require('fs')
+  const candidates = [
+    // 표준 설치 경로 (Python 3.11, 3.12, 3.13 등)
+    ...['313', '312', '311', '310'].map(
+      (v) => `${process.env.LOCALAPPDATA}\\Programs\\Python\\Python${v}\\python.exe`,
+    ),
+    // py launcher (공식 설치 시 함께 설치됨)
+    'py',
+    // 기본 fallback
+    'python',
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      if (candidate.includes('\\')) {
+        if (fs.existsSync(candidate)) return candidate
+      } else {
+        return candidate
+      }
+    } catch {
+      // 계속 탐색
+    }
+  }
+
+  return 'python'
 }
 
 export function startPythonProcess(): void {

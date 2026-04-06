@@ -66,6 +66,7 @@ class ContentItem:
     table: Optional[TableData] = None
     math: Optional[MathEquation] = None
     image: Optional[ImageData] = None
+    border: Optional[Literal['all', 'top', 'bottom', 'mid']] = None  # 문단 테두리 위치
 
 
 @dataclass

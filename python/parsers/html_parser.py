@@ -36,9 +36,23 @@ def parse_html(html: str, title: str = '') -> DocumentStructure:
                 doc.items.append(img_item)
             continue
         elif tag == 'table':
-            table_item = _parse_table(element)
-            if table_item:
-                doc.items.append(table_item)
+            # 1×1 래퍼 테이블(boxed_text)이면 풀어서 내용 직접 삽입 + 문단 테두리 마킹
+            unwrapped = _try_unwrap_wrapper_table(element)
+            if unwrapped:
+                for idx, ui in enumerate(unwrapped):
+                    if len(unwrapped) == 1:
+                        ui.border = 'all'
+                    elif idx == 0:
+                        ui.border = 'top'
+                    elif idx == len(unwrapped) - 1:
+                        ui.border = 'bottom'
+                    else:
+                        ui.border = 'mid'
+                doc.items.extend(unwrapped)
+            else:
+                table_item = _parse_table(element)
+                if table_item:
+                    doc.items.append(table_item)
         elif tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
             level = int(tag[1])
             para = _parse_paragraph(element, heading_level=level)

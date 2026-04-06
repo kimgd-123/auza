@@ -238,7 +238,7 @@ class HwpWriter(BaseWriter):
             for i, item in enumerate(doc.items):
                 try:
                     if item.item_type == 'paragraph' and item.paragraph:
-                        self._write_paragraph(hwp, item.paragraph)
+                        self._write_paragraph(hwp, item.paragraph, border=item.border)
                         written += 1
                     elif item.item_type == 'table' and item.table:
                         self._write_table(hwp, item.table)
@@ -262,8 +262,12 @@ class HwpWriter(BaseWriter):
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def _write_paragraph(self, hwp, para: Paragraph):
-        """문단 작성"""
+    def _write_paragraph(self, hwp, para: Paragraph, border: str = None):
+        """문단 작성. border: 'all'|'top'|'bottom'|'mid'|None"""
+        # 문단 테두리 설정 (boxed_text 풀린 경우)
+        if border:
+            self._set_para_border(hwp, border)
+
         # 제목이면 스타일 적용
         if para.heading_level > 0:
             style_name = f"개요 {para.heading_level}"
@@ -284,6 +288,10 @@ class HwpWriter(BaseWriter):
         # 문단 끝 줄바꿈
         act = hwp.CreateAction("BreakPara")
         act.Run()
+
+        # 테두리 해제 — 다음 문단에 번지지 않도록
+        if border and border in ('all', 'bottom'):
+            self._set_para_border(hwp, None)
 
     def _write_text_run(self, hwp, run: TextRun):
         """서식이 적용된 텍스트 런 작성"""
@@ -322,6 +330,20 @@ class HwpWriter(BaseWriter):
         hwp.HAction.GetDefault("InsertText", hwp.HParameterSet.HInsertText.HSet)
         hwp.HParameterSet.HInsertText.Text = run.text
         hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
+
+        # 서식 리셋 — 다음 런에 스타일이 번지지 않도록
+        if has_style:
+            try:
+                act = hwp.CreateAction("CharShape")
+                pset = act.CreateSet()
+                act.GetDefault(pset)
+                pset.SetItem("Bold", 0)
+                pset.SetItem("Italic", 0)
+                pset.SetItem("UnderlineType", 0)
+                pset.SetItem("TextColor", 0)  # 검정
+                act.Execute(pset)
+            except Exception:
+                pass
 
     def _write_table(self, hwp, table: TableData, nested: bool = False):
         """표 작성. nested=True이면 다른 표 셀 안에서 호출된 중첩 테이블."""
@@ -397,9 +419,9 @@ class HwpWriter(BaseWriter):
 
         tbl_props = pset.Item("TableProperties")
         tbl_props.SetItem("Width", page_width)
-        # 다단 설정 시 TreatAsChar=0 (표 단 넘김 허용), 1단은 TreatAsChar=1 (순서 유지)
-        is_multi_col = self._get_column_width(hwp) < self._get_body_width(hwp)
-        tbl_props.SetItem("TreatAsChar", 0 if is_multi_col else 1)
+        # TreatAsChar=1: 글자처럼 취급 — 본문 흐름(단/페이지)을 따름
+        # TreatAsChar=0이면 플로팅 객체가 되어 2단 레이아웃에서 단 넘김이 안 됨
+        tbl_props.SetItem("TreatAsChar", 1)
         tbl_props.SetItem("PageBreak", 1)    # 페이지/단 경계에서 나눔 허용
         pset.SetItem("TableProperties", tbl_props)
 
@@ -598,6 +620,36 @@ class HwpWriter(BaseWriter):
                 self._insert_text_with_math(hwp, line)
             if i < len(lines) - 1:
                 hwp.HAction.Run("BreakPara")
+
+    def _set_para_border(self, hwp, border: str = None):
+        """문단 테두리 설정 — boxed_text 풀림 시 시각적 테두리 재현
+
+        border: 'all'=상하좌우, 'top'=상좌우, 'bottom'=하좌우, 'mid'=좌우만, None=해제
+        ParagraphShape > BorderFill 서브셋으로 설정
+        """
+        try:
+            act = hwp.CreateAction("ParagraphShape")
+            pset = act.CreateSet()
+            act.GetDefault(pset)
+
+            bf = pset.Item("BorderFill")
+            if not bf:
+                return
+
+            top = 1 if border in ('all', 'top') else 0
+            bottom = 1 if border in ('all', 'bottom') else 0
+            left = 1 if border in ('all', 'top', 'bottom', 'mid') else 0
+            right = 1 if border in ('all', 'top', 'bottom', 'mid') else 0
+
+            bf.SetItem("BorderTypeTop", top)
+            bf.SetItem("BorderTypeBottom", bottom)
+            bf.SetItem("BorderTypeLeft", left)
+            bf.SetItem("BorderTypeRight", right)
+
+            pset.SetItem("BorderFill", bf)
+            act.Execute(pset)
+        except Exception as e:
+            sys.stderr.write(f"[hwp-writer] para border failed: {e}\n")
 
     def _set_cell_bg(self, hwp, hex_color: str):
         """셀 배경색 설정 (TableCellBorderFill)"""
