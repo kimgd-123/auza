@@ -51,6 +51,12 @@ export interface ElectronAPI {
   // OD 진행 상황 수신
   onOdProgress: (callback: (progress: OdProgress) => void) => () => void
 
+  // Python 설치 진행 상황 수신
+  onPythonInstallProgress: (callback: (progress: { step: string; detail: string; percent: number }) => void) => () => void
+
+  // OD 패키지 설치 상태 수신
+  onOdPackageStatus: (callback: (status: { status: string; error?: string }) => void) => () => void
+
   // 세션 저장/복구
   saveSession: (data: string) => Promise<{ success: boolean; error?: string }>
   loadSession: () => Promise<{ data: string | null; error: string | null }>

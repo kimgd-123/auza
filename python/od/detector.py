@@ -1,12 +1,93 @@
 """DocLayout-YOLO OD 모델 로드 및 영역 감지 — docling_pj 적응"""
 
 import sys
+import os
+import subprocess
 from pathlib import Path
 from .constants import OD_CONF, OD_IMGSZ, MODEL_REPO, MODEL_FILE, OD_LABEL_MAP
 
 
+def _add_dll_search_paths():
+    """embed Python의 VC++ DLL을 torch 등에서 찾을 수 있도록 DLL 검색 경로 추가"""
+    python_dir = os.path.dirname(sys.executable)
+    # Windows 10 1607+ 에서 DLL 검색 경로 추가
+    if hasattr(os, 'add_dll_directory'):
+        try:
+            os.add_dll_directory(python_dir)
+        except OSError:
+            pass
+    # PATH에도 추가 (fallback)
+    if python_dir not in os.environ.get('PATH', ''):
+        os.environ['PATH'] = python_dir + ';' + os.environ.get('PATH', '')
+
+
+def _od_progress(step: str, detail: str):
+    """OD 패키지 설치 진행상황을 stderr로 출력 (renderer에서 파싱)"""
+    import json
+    sys.stderr.write(f"[od-progress] {json.dumps({'step': 'setup', 'current': 0, 'total': 0, 'detail': detail})}\n")
+    sys.stderr.flush()
+
+
+def _ensure_od_packages():
+    """OD 기능에 필요한 패키지 누락 시 자동 설치"""
+    # 1. torch 확인
+    torch_ok = False
+    try:
+        import torch
+        if torch.version.cuda is None:
+            torch_ok = True
+            sys.stderr.write("[od] PyTorch CPU OK\n")
+        else:
+            sys.stderr.write(f"[od] CUDA torch detected, replacing with CPU\n")
+    except Exception as e:
+        sys.stderr.write(f"[od] torch import failed: {e}\n")
+
+    if not torch_ok:
+        _od_progress('setup', 'PyTorch CPU 설치 중... (첫 실행 시 5~10분 소요)')
+        subprocess.call(
+            [sys.executable, '-m', 'pip', 'uninstall', '-y',
+             'torch', 'torchvision', 'torchaudio'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        subprocess.check_call(
+            [sys.executable, '-m', 'pip', 'install', '--quiet',
+             '--force-reinstall', 'torch', 'torchvision',
+             '--index-url', 'https://download.pytorch.org/whl/cpu'],
+            stdout=subprocess.DEVNULL,
+        )
+        # smoke test
+        try:
+            __import__('torch')
+            _od_progress('setup', 'PyTorch CPU 설치 완료')
+        except Exception as e:
+            sys.stderr.write(f"[od] PyTorch CPU 설치 후에도 실패: {e}\n")
+            raise
+
+    # 2. huggingface_hub, doclayout-yolo 설치
+    required = {
+        'huggingface_hub': 'huggingface_hub',
+        'doclayout_yolo': 'doclayout-yolo',
+    }
+    missing = []
+    for mod, pkg in required.items():
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(pkg)
+
+    if missing:
+        _od_progress('setup', f'OD 패키지 설치 중: {", ".join(missing)}')
+        subprocess.check_call(
+            [sys.executable, '-m', 'pip', 'install', '--quiet', *missing],
+            stdout=subprocess.DEVNULL,
+        )
+        _od_progress('setup', 'OD 패키지 설치 완료')
+
+
 def load_od_model():
     """DocLayout-YOLO 모델 로드 (HuggingFace에서 자동 다운로드)"""
+    _add_dll_search_paths()
+    _ensure_od_packages()
     from huggingface_hub import hf_hub_download
     from doclayout_yolo import YOLOv10
 

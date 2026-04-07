@@ -1,6 +1,6 @@
 {
   "name": "auza",
-  "version": "2.1.6",
+  "version": "2.1.9",
   "description": "AUZA — PDF-to-Document 스마트 작성기",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -8,7 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "electron:dev": "vite",
-    "electron:build": "tsc --noEmit && vite build && electron-builder",
+    "electron:build": "tsc --noEmit && vite build && electron-builder --win nsis --config electron-builder.yml && electron-builder --win portable --config electron-builder-portable.yml",
+    "electron:build:installer": "tsc --noEmit && vite build && electron-builder --win nsis --config electron-builder.yml",
+    "electron:build:portable": "tsc --noEmit && vite build && electron-builder --win portable --config electron-builder-portable.yml",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

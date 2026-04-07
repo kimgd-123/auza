@@ -6,9 +6,11 @@
  * 응답: {"id": string, "success": boolean, "data": object, "error": string|null}
  */
 
-import { spawn, ChildProcess } from 'child_process'
+import { spawn, ChildProcess, execFileSync } from 'child_process'
 import path from 'path'
+import fs from 'fs'
 import { app, BrowserWindow } from 'electron'
+import { ensurePythonEmbed, getAppDataEmbedPath, isInstalled } from './python-installer'
 
 interface PythonResponse {
   id: string
@@ -28,6 +30,9 @@ let requestCounter = 0
 const pendingRequests = new Map<string, PendingCallback>()
 let lineBuffer = ''
 
+/** Python 런타임 초기화 promise — 동시 호출 방지 */
+let runtimeReady: Promise<string> | null = null
+
 const REQUEST_TIMEOUT_MS = 120_000 // 2분 (수식 너비 조정 등 오래 걸리는 작업)
 
 function getPythonScriptPath(): string {
@@ -37,49 +42,84 @@ function getPythonScriptPath(): string {
   return path.join(app.getAppPath(), 'python', 'main.py')
 }
 
-function findPythonExecutable(): string {
+function findPythonExecutable(): string | null {
   if (process.platform !== 'win32') return 'python3'
 
-  // Windows: 구체적인 Python 설치 경로를 우선 탐색
-  // (WindowsApps 스텁보다 실제 설치된 Python을 우선)
-  const fs = require('fs')
+  // 1순위: 번들된 embed Python (패키지된 설치 버전에서만 사용)
+  if (app.isPackaged) {
+    const bundledPath = path.join(process.resourcesPath, 'python-embed', 'python.exe')
+    if (fs.existsSync(bundledPath)) {
+      console.log(`[python-bridge] Using bundled embed Python: ${bundledPath}`)
+      return bundledPath
+    }
+  }
+
+  // 2순위: AppData에 설치된 embed Python (무설치 버전에서 자동 다운로드)
+  if (isInstalled()) {
+    const appDataPath = path.join(getAppDataEmbedPath(), 'python.exe')
+    if (fs.existsSync(appDataPath)) {
+      // smoke test — 실패 시 삭제하여 재설치 유도
+      try {
+        execFileSync(appDataPath, ['-c', 'import bs4, PIL, win32com'], { stdio: 'pipe', timeout: 10000 })
+        console.log(`[python-bridge] Using AppData embed Python: ${appDataPath}`)
+        return appDataPath
+      } catch {
+        console.log('[python-bridge] AppData embed smoke test failed, will reinstall')
+        fs.rmSync(getAppDataEmbedPath(), { recursive: true, force: true })
+      }
+    }
+  }
+
+  // 3순위: 시스템에 설치된 Python (실행 검증 포함)
   const candidates = [
-    // 표준 설치 경로 (Python 3.11, 3.12, 3.13 등)
     ...['313', '312', '311', '310'].map(
       (v) => `${process.env.LOCALAPPDATA}\\Programs\\Python\\Python${v}\\python.exe`,
     ),
-    // py launcher (공식 설치 시 함께 설치됨)
     'py',
-    // 기본 fallback
     'python',
   ]
 
   for (const candidate of candidates) {
     try {
       if (candidate.includes('\\')) {
-        if (fs.existsSync(candidate)) return candidate
-      } else {
-        return candidate
+        if (!fs.existsSync(candidate)) continue
       }
+      // 실제 실행 가능 여부 probe
+      execFileSync(candidate, ['--version'], { stdio: 'pipe', timeout: 5000 })
+      console.log(`[python-bridge] Using system Python: ${candidate}`)
+      return candidate
     } catch {
-      // 계속 탐색
+      // probe 실패 → 다음 후보
     }
   }
 
-  return 'python'
+  // Python을 찾을 수 없음
+  return null
 }
 
-export function startPythonProcess(): void {
-  if (pythonProcess) return
+/** Python 런타임 확보 — 번들/시스템/자동다운로드 순서 */
+async function ensurePythonRuntime(): Promise<string> {
+  // 번들 또는 시스템 Python이 있으면 즉시 반환
+  const existing = findPythonExecutable()
+  if (existing) return existing
 
+  // 없으면 자동 다운로드 (무설치 버전)
+  console.log('[python-bridge] Python not found, starting auto-install...')
+  return ensurePythonEmbed()
+}
+
+function spawnPythonProcess(pythonExe: string): void {
   const scriptPath = getPythonScriptPath()
-  const pythonExe = findPythonExecutable()
-
   console.log(`[python-bridge] Starting: ${pythonExe} ${scriptPath}`)
+
+  // Python embed 디렉토리를 PATH에 추가 — torch 등 외부 패키지가
+  // vcruntime140.dll 등 VC++ DLL을 찾을 수 있도록 함
+  const pythonDir = path.dirname(pythonExe)
+  const envPath = `${pythonDir};${process.env.PATH || ''}`
 
   pythonProcess = spawn(pythonExe, [scriptPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PATH: envPath },
   })
 
   // stdout: JSON 응답 수신 (line-delimited)
@@ -149,6 +189,22 @@ export function startPythonProcess(): void {
   })
 }
 
+export async function startPythonProcess(): Promise<void> {
+  if (pythonProcess) return
+
+  if (!runtimeReady) {
+    runtimeReady = ensurePythonRuntime()
+  }
+
+  try {
+    const pythonExe = await runtimeReady
+    spawnPythonProcess(pythonExe)
+  } catch (err) {
+    console.error('[python-bridge] Failed to ensure Python runtime:', (err as Error).message)
+    runtimeReady = null
+  }
+}
+
 export function stopPythonProcess(): void {
   if (!pythonProcess) return
   pythonProcess.stdin?.end()
@@ -162,7 +218,7 @@ export async function sendPythonCommand(
   timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<PythonResponse> {
   if (!pythonProcess || !pythonProcess.stdin?.writable) {
-    startPythonProcess()
+    await startPythonProcess()
     // 프로세스 시작 대기
     await new Promise((r) => setTimeout(r, 500))
     if (!pythonProcess || !pythonProcess.stdin?.writable) {

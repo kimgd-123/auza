@@ -16,6 +16,29 @@ export default function PdfViewer() {
   const [pdfData, setPdfData] = useState<Uint8Array | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [pageInputValue, setPageInputValue] = useState('')
+  const [odPackageMsg, setOdPackageMsg] = useState<string | null>(null)
+
+  // OD 패키지 설치 상태 수신
+  useEffect(() => {
+    if (!window.electronAPI?.onOdPackageStatus) return
+    const unsub = window.electronAPI.onOdPackageStatus((status) => {
+      if (status.status === 'checking') {
+        setOdPackageMsg('OD 패키지 확인 중...')
+      } else if (status.status === 'ready') {
+        setOdPackageMsg('OD 준비 완료')
+        setTimeout(() => setOdPackageMsg(null), 3000)
+      } else if (status.status === 'error') {
+        setOdPackageMsg('OD 패키지 설치 실패: ' + (status.error || ''))
+      }
+    })
+    // OD 진행상황 (stderr에서 릴레이) 도 수신
+    const unsub2 = window.electronAPI?.onOdProgress?.((progress) => {
+      if (progress.step === 'setup') {
+        setOdPackageMsg(progress.detail)
+      }
+    })
+    return () => { unsub(); unsub2?.() }
+  }, [])
   const containerRef = useRef<HTMLDivElement>(null)
   const pageWrapperRef = useRef<HTMLDivElement>(null)
   const [pageCanvas, setPageCanvas] = useState<HTMLCanvasElement | null>(null)
@@ -186,6 +209,20 @@ export default function PdfViewer() {
           &gt;
         </button>
       </div>
+
+      {/* OD 패키지 설치 상태 */}
+      {odPackageMsg && (
+        <div className={`px-3 py-2 border-b text-sm flex items-center gap-2 flex-shrink-0 ${
+          odPackageMsg.includes('실패') ? 'bg-red-50 border-red-200 text-red-700' :
+          odPackageMsg.includes('완료') ? 'bg-green-50 border-green-200 text-green-700' :
+          'bg-blue-50 border-blue-200 text-blue-700'
+        }`}>
+          {!odPackageMsg.includes('완료') && !odPackageMsg.includes('실패') && (
+            <svg className="w-4 h-4 animate-spin flex-shrink-0" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" /><path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="opacity-75" /></svg>
+          )}
+          {odPackageMsg}
+        </div>
+      )}
 
       {/* 캡처 상태 */}
       {captureLoading && (

@@ -334,14 +334,14 @@ ipcMain.handle('capture:analyze', async (_event, imageBase64: string, options?: 
       return { html: null, regions: 0, error: 'Gemini API 키가 설정되지 않았습니다.' }
     }
 
-    // OD 분석은 모델 로드 + 다중 Gemini 호출로 오래 걸릴 수 있어 5분 타임아웃
+    // OD 분석: 첫 실행 시 패키지 설치(~10분) + 모델 로드 + Gemini 호출 → 15분 타임아웃
     const result = await sendPythonCommand('od_analyze', {
       imageBase64,
       apiKey,
       pdfPath: options?.pdfPath || '',
       pageNum: options?.pageNum ?? -1,
       captureBboxNorm: options?.captureBboxNorm || null,
-    }, 300_000)
+    }, 900_000)
 
     if (!result.success || !result.data) {
       return { html: null, regions: 0, error: result.error || 'OD 분석에 실패했습니다.' }
@@ -361,8 +361,8 @@ ipcMain.handle('capture:analyze', async (_event, imageBase64: string, options?: 
 // IPC: OD 검출만 수행 (Gemini 호출 없음) — v2.1 OD Review Step
 ipcMain.handle('capture:detect', async (_event, imageBase64: string) => {
   try {
-    // cold start (모델 다운로드/로드) 고려하여 atomic 경로와 동일 타임아웃
-    const result = await sendPythonCommand('od_detect', { imageBase64 }, 300_000)
+    // cold start: 첫 실행 시 패키지 설치(~10분) + 모델 로드 → 15분 타임아웃
+    const result = await sendPythonCommand('od_detect', { imageBase64 }, 900_000)
     if (!result.success || !result.data) {
       return { detections: [], imageWidth: 0, imageHeight: 0, error: result.error || 'OD 검출 실패' }
     }
@@ -411,9 +411,44 @@ ipcMain.handle('capture:convert', async (_event, payload: {
 
 // ── HWP 연동 IPC ──
 
-// Python 백엔드 시작 (앱 초기화 시)
-app.whenReady().then(() => {
-  startPythonProcess()
+// Python 백엔드 시작 + OD 패키지 사전 설치 (앱 초기화 시)
+app.whenReady().then(async () => {
+  try {
+    await startPythonProcess()
+
+    // renderer 로드 완료 대기 후 OD 패키지 설치
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win) return
+
+    const sendStatus = (status: string, error?: string) => {
+      try { win.webContents.send('od:package-status', { status, error }) } catch { /* ignore */ }
+    }
+
+    // renderer가 로드된 후 실행
+    const startInstall = async () => {
+      // React 마운트 대기 (1초)
+      await new Promise((r) => setTimeout(r, 1000))
+      sendStatus('checking')
+
+      const result = await sendPythonCommand('ensure_od_packages', {}, 900_000)
+
+      if (result.success && (result.data as { installed: boolean })?.installed) {
+        sendStatus('ready')
+        console.log('[main] OD 패키지 설치 완료')
+      } else {
+        sendStatus('error', result.error || 'OD 패키지 설치 실패')
+        console.error('[main] OD 패키지 설치 실패:', result.error)
+      }
+    }
+
+    if (win.webContents.isLoading()) {
+      win.webContents.once('did-finish-load', () => startInstall())
+    } else {
+      startInstall()
+    }
+  } catch (err) {
+    console.error('[main] Python 시작 실패:', (err as Error).message)
+  }
 })
 
 // IPC: HWP 수동 연결 (사용자 트리거)

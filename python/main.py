@@ -26,6 +26,7 @@ def _ensure_packages():
         'bs4': 'beautifulsoup4',
         'win32com': 'pywin32',
         'PIL': 'Pillow',
+        'google.generativeai': 'google-generativeai',
     }
     missing = []
     for mod, pkg in required.items():
@@ -76,6 +77,16 @@ def handle_command(command: str, payload: dict) -> dict:
 
     if command == 'ping':
         return {"pong": True}
+
+    elif command == 'ensure_od_packages':
+        # 앱 시작 시 OD 패키지 사전 설치
+        try:
+            from od.detector import _add_dll_search_paths, _ensure_od_packages
+            _add_dll_search_paths()
+            _ensure_od_packages()
+            return {"installed": True, "error": None}
+        except Exception as e:
+            return {"installed": False, "error": str(e)}
 
     elif command == 'check_hwp':
         return _get_hwp_writer().check_connection()
