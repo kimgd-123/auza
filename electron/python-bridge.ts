@@ -10,7 +10,6 @@ import { spawn, ChildProcess, execFileSync } from 'child_process'
 import path from 'path'
 import fs from 'fs'
 import { app, BrowserWindow } from 'electron'
-import { ensurePythonEmbed, getAppDataEmbedPath, isInstalled } from './python-installer'
 
 interface PythonResponse {
   id: string
@@ -54,23 +53,7 @@ function findPythonExecutable(): string | null {
     }
   }
 
-  // 2순위: AppData에 설치된 embed Python (무설치 버전에서 자동 다운로드)
-  if (isInstalled()) {
-    const appDataPath = path.join(getAppDataEmbedPath(), 'python.exe')
-    if (fs.existsSync(appDataPath)) {
-      // smoke test — 실패 시 삭제하여 재설치 유도
-      try {
-        execFileSync(appDataPath, ['-c', 'import bs4, PIL, win32com'], { stdio: 'pipe', timeout: 10000 })
-        console.log(`[python-bridge] Using AppData embed Python: ${appDataPath}`)
-        return appDataPath
-      } catch {
-        console.log('[python-bridge] AppData embed smoke test failed, will reinstall')
-        fs.rmSync(getAppDataEmbedPath(), { recursive: true, force: true })
-      }
-    }
-  }
-
-  // 3순위: 시스템에 설치된 Python (실행 검증 포함)
+  // 2순위: 시스템에 설치된 Python (실행 검증 포함)
   const candidates = [
     ...['313', '312', '311', '310'].map(
       (v) => `${process.env.LOCALAPPDATA}\\Programs\\Python\\Python${v}\\python.exe`,
@@ -97,15 +80,11 @@ function findPythonExecutable(): string | null {
   return null
 }
 
-/** Python 런타임 확보 — 번들/시스템/자동다운로드 순서 */
+/** Python 런타임 확보 — 번들/시스템 순서 */
 async function ensurePythonRuntime(): Promise<string> {
-  // 번들 또는 시스템 Python이 있으면 즉시 반환
   const existing = findPythonExecutable()
   if (existing) return existing
-
-  // 없으면 자동 다운로드 (무설치 버전)
-  console.log('[python-bridge] Python not found, starting auto-install...')
-  return ensurePythonEmbed()
+  throw new Error('Python을 찾을 수 없습니다. 설치 버전을 사용해주세요.')
 }
 
 function spawnPythonProcess(pythonExe: string): void {

@@ -6,37 +6,7 @@ const HWP_POLL_INTERVAL = 15_000 // 15초마다 연결 상태 확인
 export default function StatusBar() {
   const { blocks, hwpConnected, setHwpConnected, hwpExporting, hwpExportError, setHwpExportError, currentPage, totalPages } = useAppStore()
   const [connecting, setConnecting] = useState(false)
-  const [pythonInstall, setPythonInstall] = useState<{ detail: string; percent: number } | null>(null)
-  const [odPackageStatus, setOdPackageStatus] = useState<string | null>(null)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  // Python 설치 진행 상황 수신
-  useEffect(() => {
-    if (!window.electronAPI?.onPythonInstallProgress) return
-    const unsub = window.electronAPI.onPythonInstallProgress((progress) => {
-      if (progress.step === 'done' || progress.step === 'error') {
-        setTimeout(() => setPythonInstall(null), 3000)
-      }
-      setPythonInstall({ detail: progress.detail, percent: progress.percent })
-    })
-    return unsub
-  }, [])
-
-  // OD 패키지 설치 상태 수신
-  useEffect(() => {
-    if (!window.electronAPI?.onOdPackageStatus) return
-    const unsub = window.electronAPI.onOdPackageStatus((status) => {
-      if (status.status === 'checking') {
-        setOdPackageStatus('OD 패키지 확인 중...')
-      } else if (status.status === 'ready') {
-        setOdPackageStatus('OD 준비 완료')
-        setTimeout(() => setOdPackageStatus(null), 3000)
-      } else if (status.status === 'error') {
-        setOdPackageStatus('OD 패키지 설치 실패: ' + (status.error || ''))
-      }
-    })
-    return unsub
-  }, [])
 
   // 주기적 HWP 연결 상태 폴링
   useEffect(() => {
@@ -107,16 +77,6 @@ export default function StatusBar() {
         <span className="border-l border-gray-300 pl-4 text-red-500 flex items-center gap-1">
           {hwpExportError}
           <button onClick={() => setHwpExportError(null)} className="text-red-400 hover:text-red-600 ml-1">x</button>
-        </span>
-      )}
-      {pythonInstall && (
-        <span className={`border-l border-gray-300 pl-4 ${pythonInstall.percent < 0 ? 'text-red-500' : 'text-blue-600'}`}>
-          {pythonInstall.detail}
-        </span>
-      )}
-      {odPackageStatus && (
-        <span className={`border-l border-gray-300 pl-4 ${odPackageStatus.includes('실패') ? 'text-red-500' : 'text-blue-600'}`}>
-          {odPackageStatus}
         </span>
       )}
       <div className="flex-1" />

@@ -76,13 +76,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => { ipcRenderer.removeListener('od:progress', handler) }
   },
 
-  // Python 설치 진행 상황 수신
-  onPythonInstallProgress: (callback: (progress: { step: string; detail: string; percent: number }) => void) => {
-    const handler = (_event: unknown, progress: { step: string; detail: string; percent: number }) => callback(progress)
-    ipcRenderer.on('python:install-progress', handler)
-    return () => { ipcRenderer.removeListener('python:install-progress', handler) }
-  },
-
   // OD 패키지 설치 상태 수신
   onOdPackageStatus: (callback: (status: { status: string; error?: string }) => void) => {
     const handler = (_event: unknown, status: { status: string; error?: string }) => callback(status)
