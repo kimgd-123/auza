@@ -27,6 +27,7 @@ def _ensure_packages():
         'win32com': 'pywin32',
         'PIL': 'Pillow',
         'google.generativeai': 'google-generativeai',
+        'fitz': 'PyMuPDF',
     }
     missing = []
     for mod, pkg in required.items():
