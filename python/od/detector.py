@@ -57,7 +57,10 @@ def _od_progress(step: str, detail: str):
 
 
 def _is_in_od_dir(mod_name: str) -> bool:
-    """모듈이 od-packages 경로에서 로드되었는지 확인"""
+    """모듈이 od-packages 경로에서 로드되었는지 확인
+    시스템 Python에서는 경로 검증을 건너뛰고 항상 True 반환 (시스템 패키지 보호)"""
+    if not _is_embed_python():
+        return True
     import importlib.util
     od_dir = _get_od_packages_dir().lower()
     spec = importlib.util.find_spec(mod_name)
@@ -66,8 +69,19 @@ def _is_in_od_dir(mod_name: str) -> bool:
     return False
 
 
+def _is_embed_python() -> bool:
+    """현재 Python이 AUZA 번들 python-embed인지 확인"""
+    exe_dir = os.path.dirname(sys.executable).lower()
+    # python-embed 디렉토리 내 python.exe 또는 resources/python-embed 경로
+    return 'python-embed' in exe_dir
+
+
 def _cleanup_legacy_site_packages():
-    """python-embed/Lib/site-packages에 남아있는 OD 관련 패키지 제거"""
+    """python-embed/Lib/site-packages에 남아있는 OD 관련 패키지 제거
+    (시스템 Python에서는 절대 실행하지 않음)"""
+    if not _is_embed_python():
+        sys.stderr.write("[od] 시스템 Python — legacy 정리 건너뜀\n")
+        return
     import shutil
     site_pkg = os.path.join(os.path.dirname(sys.executable), 'Lib', 'site-packages')
     if not os.path.isdir(site_pkg):
