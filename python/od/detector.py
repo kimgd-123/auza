@@ -56,30 +56,77 @@ def _od_progress(step: str, detail: str):
     sys.stderr.flush()
 
 
+def _is_in_od_dir(mod_name: str) -> bool:
+    """모듈이 od-packages 경로에서 로드되었는지 확인"""
+    import importlib.util
+    od_dir = _get_od_packages_dir().lower()
+    spec = importlib.util.find_spec(mod_name)
+    if spec and spec.origin:
+        return spec.origin.lower().startswith(od_dir)
+    return False
+
+
+def _cleanup_legacy_site_packages():
+    """python-embed/Lib/site-packages에 남아있는 OD 관련 패키지 제거"""
+    import shutil
+    site_pkg = os.path.join(os.path.dirname(sys.executable), 'Lib', 'site-packages')
+    if not os.path.isdir(site_pkg):
+        return
+    targets = ['torch', 'torchvision', 'torchaudio', 'doclayout_yolo',
+               'huggingface_hub']
+    for name in os.listdir(site_pkg):
+        name_lower = name.lower()
+        for t in targets:
+            if name_lower == t or name_lower.startswith(t + '-') or name_lower.startswith(t + '.'):
+                full = os.path.join(site_pkg, name)
+                try:
+                    if os.path.isdir(full):
+                        shutil.rmtree(full, ignore_errors=True)
+                    else:
+                        os.remove(full)
+                    sys.stderr.write(f"[od] legacy 정리: {full}\n")
+                except Exception as e:
+                    sys.stderr.write(f"[od] legacy 정리 실패: {full} — {e}\n")
+                break
+
+
 def _ensure_od_packages():
     """OD 기능에 필요한 패키지 누락 시 %APPDATA%/AUZA-v2/od-packages/에 자동 설치"""
     od_dir = _get_od_packages_dir()
     _ensure_od_site_path()
 
-    # 1. torch 확인
+    # 0. legacy site-packages 정리 (업그레이드 시 1회)
+    _cleanup_legacy_site_packages()
+
+    # 1. torch 확인 — od-packages 경로에서 로드되는지까지 검증
     torch_ok = False
     try:
         import torch
-        if torch.version.cuda is None:
+        if torch.version.cuda is not None:
+            sys.stderr.write("[od] CUDA torch detected, replacing with CPU\n")
+        elif not _is_in_od_dir('torch'):
+            sys.stderr.write(f"[od] torch가 od-packages 밖에서 로드됨: {getattr(torch, '__file__', '?')}, 재설치\n")
+        else:
             torch_ok = True
             sys.stderr.write("[od] PyTorch CPU OK\n")
-        else:
-            sys.stderr.write(f"[od] CUDA torch detected, replacing with CPU\n")
     except Exception as e:
         sys.stderr.write(f"[od] torch import failed: {e}\n")
 
     if not torch_ok:
         _od_progress('setup', 'PyTorch CPU 설치 중... (첫 실행 시 5~10분 소요)')
+        # 기존 설치 제거
         subprocess.call(
             [sys.executable, '-m', 'pip', 'uninstall', '-y',
              'torch', 'torchvision', 'torchaudio'],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+        # od-packages 내 잔재도 정리
+        import shutil
+        for name in os.listdir(od_dir):
+            if name.lower().startswith(('torch', 'torchvision', 'torchaudio')):
+                full = os.path.join(od_dir, name)
+                shutil.rmtree(full, ignore_errors=True) if os.path.isdir(full) else os.remove(full)
+
         subprocess.check_call(
             [sys.executable, '-m', 'pip', 'install', '--quiet',
              '--force-reinstall', '--target', od_dir,
@@ -91,6 +138,10 @@ def _ensure_od_packages():
         try:
             import importlib
             importlib.invalidate_caches()
+            # 기존 모듈 캐시 제거 후 재로드
+            for m in list(sys.modules.keys()):
+                if m == 'torch' or m.startswith('torch.'):
+                    del sys.modules[m]
             __import__('torch')
             _od_progress('setup', 'PyTorch CPU 설치 완료')
         except Exception as e:
@@ -106,6 +157,9 @@ def _ensure_od_packages():
     for mod, pkg in required.items():
         try:
             __import__(mod)
+            if not _is_in_od_dir(mod):
+                sys.stderr.write(f"[od] {mod}가 od-packages 밖에서 로드됨, 재설치\n")
+                missing.append(pkg)
         except ImportError:
             missing.append(pkg)
 
