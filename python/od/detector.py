@@ -7,18 +7,46 @@ from pathlib import Path
 from .constants import OD_CONF, OD_IMGSZ, MODEL_REPO, MODEL_FILE, OD_LABEL_MAP
 
 
+def _get_od_packages_dir() -> str:
+    """OD 패키지 설치 경로 반환 — %APPDATA%/AUZA-v2/od-packages/
+    앱 업데이트 시에도 패키지가 유지되도록 사용자 데이터 영역에 설치"""
+    od_dir = os.path.join(
+        os.environ.get('APPDATA', os.path.expanduser('~')),
+        'AUZA-v2', 'od-packages',
+    )
+    os.makedirs(od_dir, exist_ok=True)
+    return od_dir
+
+
+def _ensure_od_site_path():
+    """OD 패키지 경로를 sys.path 최우선에 추가 (import 가능하도록)"""
+    od_dir = _get_od_packages_dir()
+    if od_dir not in sys.path:
+        sys.path.insert(0, od_dir)
+
+
 def _add_dll_search_paths():
     """embed Python의 VC++ DLL을 torch 등에서 찾을 수 있도록 DLL 검색 경로 추가"""
     python_dir = os.path.dirname(sys.executable)
+    od_dir = _get_od_packages_dir()
     # Windows 10 1607+ 에서 DLL 검색 경로 추가
     if hasattr(os, 'add_dll_directory'):
-        try:
-            os.add_dll_directory(python_dir)
-        except OSError:
-            pass
+        for d in [python_dir, od_dir]:
+            try:
+                os.add_dll_directory(d)
+            except OSError:
+                pass
+        # torch DLL 경로도 추가
+        torch_lib = os.path.join(od_dir, 'torch', 'lib')
+        if os.path.isdir(torch_lib):
+            try:
+                os.add_dll_directory(torch_lib)
+            except OSError:
+                pass
     # PATH에도 추가 (fallback)
-    if python_dir not in os.environ.get('PATH', ''):
-        os.environ['PATH'] = python_dir + ';' + os.environ.get('PATH', '')
+    for d in [python_dir, od_dir]:
+        if d not in os.environ.get('PATH', ''):
+            os.environ['PATH'] = d + ';' + os.environ.get('PATH', '')
 
 
 def _od_progress(step: str, detail: str):
@@ -29,7 +57,10 @@ def _od_progress(step: str, detail: str):
 
 
 def _ensure_od_packages():
-    """OD 기능에 필요한 패키지 누락 시 자동 설치"""
+    """OD 기능에 필요한 패키지 누락 시 %APPDATA%/AUZA-v2/od-packages/에 자동 설치"""
+    od_dir = _get_od_packages_dir()
+    _ensure_od_site_path()
+
     # 1. torch 확인
     torch_ok = False
     try:
@@ -51,12 +82,15 @@ def _ensure_od_packages():
         )
         subprocess.check_call(
             [sys.executable, '-m', 'pip', 'install', '--quiet',
-             '--force-reinstall', 'torch', 'torchvision',
+             '--force-reinstall', '--target', od_dir,
+             'torch', 'torchvision',
              '--index-url', 'https://download.pytorch.org/whl/cpu'],
             stdout=subprocess.DEVNULL,
         )
         # smoke test
         try:
+            import importlib
+            importlib.invalidate_caches()
             __import__('torch')
             _od_progress('setup', 'PyTorch CPU 설치 완료')
         except Exception as e:
@@ -78,15 +112,19 @@ def _ensure_od_packages():
     if missing:
         _od_progress('setup', f'OD 패키지 설치 중: {", ".join(missing)}')
         subprocess.check_call(
-            [sys.executable, '-m', 'pip', 'install', '--quiet', *missing],
+            [sys.executable, '-m', 'pip', 'install', '--quiet',
+             '--target', od_dir, *missing],
             stdout=subprocess.DEVNULL,
         )
+        import importlib
+        importlib.invalidate_caches()
         _od_progress('setup', 'OD 패키지 설치 완료')
 
 
 def load_od_model():
     """DocLayout-YOLO 모델 로드 (HuggingFace에서 자동 다운로드)"""
     _add_dll_search_paths()
+    _ensure_od_site_path()
     _ensure_od_packages()
     from huggingface_hub import hf_hub_download
     from doclayout_yolo import YOLOv10
