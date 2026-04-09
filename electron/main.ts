@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
 import path from 'path'
 import fs from 'fs/promises'
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { autoUpdater } from 'electron-updater'
 import { startPythonProcess, stopPythonProcess, sendPythonCommand } from './python-bridge'
 
 let mainWindow: BrowserWindow | null = null
@@ -44,6 +45,43 @@ app.whenReady().then(() => {
   // Electron 기본 메뉴 제거
   Menu.setApplicationMenu(null)
   createWindow()
+
+  // ── 자동 업데이트 (production만) ──
+  if (!process.env.VITE_DEV_SERVER_URL) {
+    autoUpdater.autoDownload = true
+    autoUpdater.autoInstallOnAppQuit = true
+
+    autoUpdater.on('update-available', (info) => {
+      mainWindow?.webContents.send('update:available', info.version)
+    })
+
+    autoUpdater.on('download-progress', (progress) => {
+      mainWindow?.webContents.send('update:progress', Math.round(progress.percent))
+    })
+
+    autoUpdater.on('update-downloaded', (info) => {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'info',
+        title: '업데이트 준비 완료',
+        message: `새 버전 ${info.version}이 다운로드되었습니다.\n지금 재시작하여 업데이트하시겠습니까?`,
+        buttons: ['지금 재시작', '나중에'],
+        defaultId: 0,
+      }).then(({ response }) => {
+        if (response === 0) {
+          autoUpdater.quitAndInstall()
+        }
+      })
+    })
+
+    autoUpdater.on('error', (err) => {
+      console.error('[auto-updater] 업데이트 체크 실패:', err.message)
+    })
+
+    // 앱 시작 후 3초 뒤 업데이트 확인
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(() => {})
+    }, 3000)
+  }
 })
 
 app.on('window-all-closed', () => {

@@ -15,6 +15,11 @@ win:
 nsis:
   oneClick: true
   perMachine: false
+  allowToChangeInstallationDirectory: false
+publish:
+  provider: github
+  owner: kimgd-123
+  repo: auza
 extraResources:
   - from: python
     to: python
