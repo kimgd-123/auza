@@ -41,6 +41,21 @@ function createWindow() {
   })
 }
 
+// 단일 인스턴스 보장 — 두 번째 실행 시 기존 창에 포커스만 주고 종료.
+// in-process config 직렬화 큐(updateConfig)는 단일 main 프로세스에서만 유효하므로,
+// 다중 인스턴스 실행 시 config.json race를 방지하기 위해 필수.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+  })
+}
+
 app.whenReady().then(() => {
   // Electron 기본 메뉴 제거
   Menu.setApplicationMenu(null)
@@ -564,6 +579,51 @@ ipcMain.handle('session:allowPdf', async (_event, filePath: string) => {
   }
 })
 
+// ── 공용 config.json 접근 계층 ──
+// 단일 config 파일(%APPDATA%/AUZA-v2/config.json)에 대한 read-modify-write를
+// 프로세스 내부 Promise 큐로 직렬화하고 tmp-write/rename으로 원자적 저장.
+// geminiApiKey, lastSeenVersion 등 모든 필드 저장은 이 경로를 거쳐야 race 없이
+// 병합된다. (Codex F2 대응)
+
+function getConfigPath(): string {
+  return path.join(app.getPath('appData'), 'AUZA-v2', 'config.json')
+}
+
+async function readConfigRaw(): Promise<Record<string, unknown>> {
+  try {
+    const raw = await fs.readFile(getConfigPath(), 'utf-8')
+    const parsed = JSON.parse(raw)
+    return typeof parsed === 'object' && parsed !== null ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+async function writeConfigAtomic(config: Record<string, unknown>): Promise<void> {
+  const configPath = getConfigPath()
+  await fs.mkdir(path.dirname(configPath), { recursive: true })
+  const tmpPath = configPath + '.tmp'
+  await fs.writeFile(tmpPath, JSON.stringify(config, null, 2), 'utf-8')
+  await fs.rename(tmpPath, configPath)
+}
+
+// 프로세스 내 직렬화 큐: 모든 read-modify-write를 한 번에 하나씩 처리
+let configWriteQueue: Promise<unknown> = Promise.resolve()
+
+function updateConfig<T>(
+  mutator: (config: Record<string, unknown>) => T | Promise<T>,
+): Promise<T> {
+  const next = configWriteQueue.then(async () => {
+    const config = await readConfigRaw()
+    const result = await mutator(config)
+    await writeConfigAtomic(config)
+    return result
+  })
+  // 큐 자체는 실패해도 이어져야 하므로 rejection을 삼킨다
+  configWriteQueue = next.catch(() => undefined)
+  return next
+}
+
 // ── Gemini API 키 설정 IPC ──
 
 ipcMain.handle('config:getApiKey', async () => {
@@ -573,18 +633,39 @@ ipcMain.handle('config:getApiKey', async () => {
 
 ipcMain.handle('config:saveApiKey', async (_event, apiKey: string) => {
   try {
-    const configDir = path.join(app.getPath('appData'), 'AUZA-v2')
-    const configPath = path.join(configDir, 'config.json')
-    await fs.mkdir(configDir, { recursive: true })
+    await updateConfig((config) => {
+      config.geminiApiKey = apiKey.trim()
+    })
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: (err as Error).message }
+  }
+})
 
-    let config: Record<string, unknown> = {}
-    try {
-      const existing = await fs.readFile(configPath, 'utf-8')
-      config = JSON.parse(existing)
-    } catch { /* first time */ }
+// ── 릴리즈 노트 표시 이력 (lastSeenVersion) ──
+// 버전 업 후 첫 실행 시 ReleaseNotesDialog 자동 표시 여부 결정
 
-    config.geminiApiKey = apiKey.trim()
-    await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8')
+// IPC: 현재 앱 버전 반환
+ipcMain.handle('app:getVersion', () => {
+  return app.getVersion()
+})
+
+// IPC: 마지막으로 사용자가 본 릴리즈 노트 버전
+ipcMain.handle('app:getLastSeenVersion', async () => {
+  try {
+    const config = await readConfigRaw()
+    return { version: (config.lastSeenVersion as string) || null }
+  } catch {
+    return { version: null }
+  }
+})
+
+// IPC: 사용자가 본 릴리즈 노트 버전 저장
+ipcMain.handle('app:setLastSeenVersion', async (_event, version: string) => {
+  try {
+    await updateConfig((config) => {
+      config.lastSeenVersion = version
+    })
     return { success: true }
   } catch (err) {
     return { success: false, error: (err as Error).message }

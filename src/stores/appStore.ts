@@ -86,6 +86,12 @@ interface AppState {
   toggleBlockCollapse: (id: string) => void
   collapseAllBlocks: () => void
   expandAllBlocks: () => void
+
+  // 릴리즈 노트 모달 (단일 source of truth)
+  releaseNotesOpen: boolean
+  releaseNotesAutoShown: boolean   // 버전 업 후 자동 표시인지 여부 (헤더 문구 전환용)
+  openReleaseNotes: (autoShown?: boolean) => void
+  closeReleaseNotes: () => void    // 닫을 때 lastSeenVersion을 현재 버전으로 저장
 }
 
 // 빈 ProseMirror JSON (빈 문단 1개)
@@ -286,4 +292,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       collapsedBlockIds: new Set(state.blocks.map((b) => b.id)),
     })),
   expandAllBlocks: () => set({ collapsedBlockIds: new Set<string>() }),
+
+  // 릴리즈 노트 모달
+  releaseNotesOpen: false,
+  releaseNotesAutoShown: false,
+  openReleaseNotes: (autoShown = false) =>
+    set({ releaseNotesOpen: true, releaseNotesAutoShown: autoShown }),
+  closeReleaseNotes: () => {
+    set({ releaseNotesOpen: false, releaseNotesAutoShown: false })
+    // 어떤 진입점에서 열었든 닫을 때 항상 현재 버전을 "본 버전"으로 저장
+    // → 수동으로 열어본 경우에도 다음 실행 시 자동 표시 안 됨
+    try {
+      window.electronAPI?.setLastSeenVersion?.(__APP_VERSION__).catch(() => { /* ignore */ })
+    } catch { /* ignore */ }
+  },
 }))

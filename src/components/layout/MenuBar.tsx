@@ -7,14 +7,14 @@ import TutorialOverlay, { isTutorialDone, resetTutorial } from './TutorialOverla
 import InfoDialog from './InfoDialog'
 
 export default function MenuBar() {
-  const { layoutMode, setLayoutMode, hwpExporting, setHwpExporting, setHwpExportError, setHwpConnected } = useAppStore()
+  const { layoutMode, setLayoutMode, hwpExporting, setHwpExporting, setHwpExportError, setHwpConnected, openReleaseNotes } = useAppStore()
   const [showCursorDialog, setShowCursorDialog] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showTutorial, setShowTutorial] = useState(false)
   const [showInfo, setShowInfo] = useState(false)
   const [eqFixing, setEqFixing] = useState(false)
 
-  // 앱 시작 시: API 키 확인 + 튜토리얼 자동 표시
+  // 앱 시작 시: API 키 확인 + 튜토리얼 자동 표시 + 버전 업 감지
   useEffect(() => {
     // 첫 실행이면 튜토리얼 자동 표시
     if (!isTutorialDone()) {
@@ -27,7 +27,17 @@ export default function MenuBar() {
         setShowSettings(true)
       }
     })
-  }, [])
+
+    // 버전 업 감지: lastSeenVersion ≠ 현재 버전이면 릴리즈 노트 자동 표시
+    // 튜토리얼이 끝나지 않은 최초 설치 상태는 노이즈를 피하기 위해 제외
+    if (isTutorialDone() && window.electronAPI?.getLastSeenVersion) {
+      window.electronAPI.getLastSeenVersion().then((res) => {
+        if (res.version !== __APP_VERSION__) {
+          openReleaseNotes(true)
+        }
+      }).catch(() => { /* ignore */ })
+    }
+  }, [openReleaseNotes])
 
   const handleOpenPdf = async () => {
     if (!window.electronAPI) return
@@ -162,6 +172,16 @@ export default function MenuBar() {
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </button>
+
+        <button
+          onClick={() => openReleaseNotes(false)}
+          className="px-2 py-1 text-gray-500 hover:bg-gray-100 rounded transition-colors"
+          title="업데이트 내역"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
           </svg>
         </button>
 

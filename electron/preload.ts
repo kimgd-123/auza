@@ -90,4 +90,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('session:load') as Promise<{ data: string | null; error: string | null }>,
   clearSession: () =>
     ipcRenderer.invoke('session:clear') as Promise<{ success: boolean }>,
+
+  // 앱 버전 + 릴리즈 노트 표시 이력
+  getAppVersion: () =>
+    ipcRenderer.invoke('app:getVersion') as Promise<string>,
+  getLastSeenVersion: () =>
+    ipcRenderer.invoke('app:getLastSeenVersion') as Promise<{ version: string | null }>,
+  setLastSeenVersion: (version: string) =>
+    ipcRenderer.invoke('app:setLastSeenVersion', version) as Promise<{ success: boolean; error?: string }>,
 })

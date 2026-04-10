@@ -58,6 +58,11 @@ export interface ElectronAPI {
   saveSession: (data: string) => Promise<{ success: boolean; error?: string }>
   loadSession: () => Promise<{ data: string | null; error: string | null }>
   clearSession: () => Promise<{ success: boolean }>
+
+  // 앱 버전 + 릴리즈 노트 표시 이력
+  getAppVersion: () => Promise<string>
+  getLastSeenVersion: () => Promise<{ version: string | null }>
+  setLastSeenVersion: (version: string) => Promise<{ success: boolean; error?: string }>
 }
 
 // OD 진행 상황
