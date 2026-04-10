@@ -1,7 +1,7 @@
-appId: com.auza.app
-productName: AUZA
+appId: com.auza-v2.app
+productName: AUZA-v2
 directories:
-  output: release
+  output: release/설치버전
 files:
   - dist
   - dist-electron
@@ -9,11 +9,19 @@ asar: true
 asarUnpack:
   - "!python/**"
 win:
-  target: nsis
+  target:
+    - nsis
   # icon: resources/icons/icon.ico  # Phase 8에서 아이콘 추가 후 활성화
 nsis:
   oneClick: true
   perMachine: false
+  allowToChangeInstallationDirectory: false
+publish:
+  provider: github
+  owner: kimgd-123
+  repo: auza
 extraResources:
   - from: python
     to: python
+  - from: python-embed
+    to: python-embed

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@/stores/appStore'
-import type { OdProgress } from '@/types'
+import { useAssetStore } from '@/stores/assetStore'
+import type { OdProgress, OdDetection, PendingOdReview } from '@/types'
+import OdReviewOverlay from './OdReviewOverlay'
 
 const VISION_PROMPT = `이 영역의 콘텐츠를 분석하여 HTML로 구조화해주세요.
 
@@ -68,6 +70,7 @@ const VISION_PROMPT = `이 영역의 콘텐츠를 분석하여 HTML로 구조화
 interface Props {
   pageCanvas: HTMLCanvasElement | null
   scale: number
+  pdfData?: Uint8Array | null
 }
 
 interface DragRect {
@@ -88,14 +91,39 @@ function stripCodeFences(text: string): string {
   return s.trim()
 }
 
-export default function AreaCapture({ pageCanvas, scale }: Props) {
-  const { captureLoading, setCaptureLoading, setCaptureError, odEnabled, setOdEnabled } = useAppStore()
+export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
+  const { captureLoading, setCaptureLoading, setCaptureError, odEnabled, setOdEnabled, odReviewEnabled, setOdReviewEnabled } = useAppStore()
   const overlayRef = useRef<HTMLDivElement>(null)
   const [dragRect, setDragRect] = useState<DragRect | null>(null)
   const isDraggingRef = useRef(false)
-  const [lastCapture, setLastCapture] = useState<{ base64: string; blockId: string } | null>(null)
+  const [lastCapture, setLastCapture] = useState<{ base64: string; blockId: string; captureBboxNorm?: number[] } | null>(null)
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
   const [odProgress, setOdProgress] = useState<OdProgress | null>(null)
+  const [imgCropMode, setImgCropMode] = useState(false)
+
+  // v2.1 OD Review Step
+  const [pendingReview, setPendingReview] = useState<PendingOdReview | null>(null)
+
+  // v2.1 Navigation Lock — 리뷰 중 페이지 변경 시 discard 확인
+  const currentPage = useAppStore((s) => s.currentPage)
+  const prevPageRef = useRef(currentPage)
+  useEffect(() => {
+    if (pendingReview && prevPageRef.current !== currentPage) {
+      const prevPage = prevPageRef.current
+      // ref를 먼저 갱신하여 setCurrentPage 복원 시 re-trigger 방지
+      prevPageRef.current = currentPage
+      const discard = window.confirm('OD 리뷰가 진행 중입니다. 편집 내용을 버리고 이동하시겠습니까?')
+      if (discard) {
+        setPendingReview(null)
+      } else {
+        // 이동 취소 — 이전 페이지로 복원
+        prevPageRef.current = prevPage
+        useAppStore.getState().setCurrentPage(prevPage)
+      }
+    } else {
+      prevPageRef.current = currentPage
+    }
+  }, [currentPage, pendingReview])
 
   // OD 진행 상황 수신
   useEffect(() => {
@@ -185,17 +213,34 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
       html = result.html ? stripCodeFences(result.html) : null
       error = result.error
 
-      // PDF 이미지 추출 — OD OFF에서도 이미지를 포함
-      if (html && window.electronAPI.extractPdfImages) {
+      // PDF 이미지 추출 — 캡처 영역과 겹치는 이미지만 필터링 + Asset Store 등록
+      if (html && window.electronAPI.extractPdfImages && captureBboxNorm) {
         const { pdfPath, currentPage } = useAppStore.getState()
         if (pdfPath) {
           try {
             const imgResult = await window.electronAPI.extractPdfImages(pdfPath, currentPage - 1)
             if (imgResult.images && imgResult.images.length > 0) {
-              const imgTags = imgResult.images.map(
-                (img) => `<img src="data:image/png;base64,${img.base64}" alt="PDF 이미지" style="max-width: 100%;" />`
-              ).join('\n')
-              html = imgTags + '\n' + html
+              // 캡처 영역과 겹치는 이미지만 필터 (IoU > 0 = overlap 있음)
+              const overlapping = imgResult.images.filter((img) => {
+                const [ax1, ay1, ax2, ay2] = captureBboxNorm
+                const [bx1, by1, bx2, by2] = img.bbox_norm
+                const ox1 = Math.max(ax1, bx1), oy1 = Math.max(ay1, by1)
+                const ox2 = Math.min(ax2, bx2), oy2 = Math.min(ay2, by2)
+                return ox1 < ox2 && oy1 < oy2 // overlap 존재
+              })
+              if (overlapping.length > 0) {
+                const imgTags = overlapping.map((img) => {
+                  const imgAssetId = useAssetStore.getState().registerAsset({
+                    type: 'image',
+                    base64: img.base64,
+                    alt: 'PDF 이미지',
+                    sourceBlock: targetBlockId,
+                    sourcePage: currentPage,
+                  })
+                  return `<img data-asset-id="${imgAssetId}" src="data:image/png;base64,${img.base64}" alt="PDF 이미지" style="max-width: 100%;" />`
+                }).join('\n')
+                html = imgTags + '\n' + html
+              }
             }
           } catch {
             // 이미지 추출 실패는 무시
@@ -213,14 +258,53 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
     }
     if (!html) return
 
+    // Asset Store에 캡처 스크린샷 등록
+    const { currentPage } = useAppStore.getState()
+    useAssetStore.getState().registerAsset({
+      type: 'capture',
+      base64: captureBase64,
+      alt: '캡처 영역',
+      sourceBlock: targetBlockId,
+      sourcePage: currentPage,
+    })
+
+    // HTML 내 data-asset-id가 없는 이미지에 개별 Asset ID 부여
+    const currentHtml = html
+    html = currentHtml.replace(
+      /<img(?![^>]*data-asset-id)\s([^>]*>)/gi,
+      (_match, rest: string) => {
+        // 이미지 src에서 base64 추출
+        const srcMatch = rest.match(/src="data:image\/[^;]+;base64,([^"]+)"/)
+        const imgAssetId = useAssetStore.getState().registerAsset({
+          type: 'image',
+          base64: srcMatch?.[1] || '',
+          alt: 'Gemini 생성 이미지',
+          sourceBlock: targetBlockId,
+          sourcePage: currentPage,
+        })
+        return `<img data-asset-id="${imgAssetId}" ${rest}`
+      },
+    )
+
     // F2 수정: TipTap insertContent로 HTML 구조 보존 (표/서식/수식)
     // RichEditor가 리스닝하는 커스텀 이벤트 발행
     const blockStillExists = useAppStore.getState().blocks.some((b) => b.id === targetBlockId)
     if (!blockStillExists) return
 
-    window.dispatchEvent(new CustomEvent('auza:insertHtml', {
-      detail: { blockId: targetBlockId, html },
-    }))
+    // 접힌 블록이면 자동 펼기
+    const { collapsedBlockIds: collapsed2, toggleBlockCollapse: toggle2 } = useAppStore.getState()
+    if (collapsed2.has(targetBlockId)) {
+      toggle2(targetBlockId)
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('auza:insertHtml', {
+          detail: { blockId: targetBlockId, html },
+        }))
+      }, 100)
+    } else {
+      window.dispatchEvent(new CustomEvent('auza:insertHtml', {
+        detail: { blockId: targetBlockId, html },
+      }))
+    }
   }, [setCaptureLoading, setCaptureError, odEnabled])
 
   const handleMouseUp = useCallback(async () => {
@@ -252,8 +336,8 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
     const srcW = w * dpr
     const srcH = h * dpr
 
-    // 최소 캡처 해상도 보장 — OD ON: 크롭 후에도 품질 유지 위해 2000px, OFF: 800px
-    const minLongSide = odEnabled ? 2000 : 800
+    // 최소 캡처 해상도 보장 — OD/IMG 크롭: 2000px, 일반: 800px
+    const minLongSide = (odEnabled || imgCropMode) ? 2000 : 800
     const longSide = Math.max(srcW, srcH)
     let captureScale = longSide < minLongSide ? minLongSide / longSide : 1.0
 
@@ -295,17 +379,240 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
       (y + h) / canvasH,
     ]
 
-    setLastCapture({ base64, blockId: targetBlockId })
+    // 이미지 크롭 모드: PDF를 고해상도로 렌더링 후 크롭
+    if (imgCropMode) {
+      const { currentPage: curPage } = useAppStore.getState()
+
+      let highResDataUrl = dataUrl  // fallback: 화면 canvas 크롭
+
+      // pdfData가 있으면 PDF에서 직접 고해상도 렌더링
+      if (pdfData) {
+        try {
+          const { pdfjs } = await import('react-pdf')
+          const loadingTask = pdfjs.getDocument({ data: pdfData.slice() })
+          const pdfDoc = await loadingTask.promise
+          const page = await pdfDoc.getPage(curPage)
+
+          // 원본 PDF 페이지 크기 대비 300DPI 스케일 계산
+          const pdfViewport = page.getViewport({ scale: 1 })
+          const targetDPI = 300
+          const hiresScale = (targetDPI / 72)  // PDF 기본 72DPI → 300DPI
+          const hiresViewport = page.getViewport({ scale: hiresScale })
+
+          // 오프스크린 캔버스에 고해상도 렌더링
+          const offCanvas = document.createElement('canvas')
+          offCanvas.width = hiresViewport.width
+          offCanvas.height = hiresViewport.height
+          const offCtx = offCanvas.getContext('2d')
+          if (offCtx) {
+            await page.render({ canvasContext: offCtx, viewport: hiresViewport }).promise
+
+            // 화면 좌표 → PDF 좌표 변환하여 크롭
+            const displayW = pageCanvas.clientWidth
+            const displayH = pageCanvas.clientHeight
+            const cropX = (x / displayW) * hiresViewport.width
+            const cropY = (y / displayH) * hiresViewport.height
+            const cropW = (w / displayW) * hiresViewport.width
+            const cropH = (h / displayH) * hiresViewport.height
+
+            const cropCanvas = document.createElement('canvas')
+            cropCanvas.width = Math.round(cropW)
+            cropCanvas.height = Math.round(cropH)
+            const cropCtx = cropCanvas.getContext('2d')
+            if (cropCtx) {
+              cropCtx.drawImage(
+                offCanvas,
+                Math.round(cropX), Math.round(cropY),
+                Math.round(cropW), Math.round(cropH),
+                0, 0,
+                Math.round(cropW), Math.round(cropH),
+              )
+              highResDataUrl = cropCanvas.toDataURL('image/png')
+            }
+          }
+          pdfDoc.destroy()
+        } catch (err) {
+          console.warn('[IMG crop] PDF 고해상도 렌더링 실패, 화면 캔버스 fallback:', err)
+        }
+      }
+
+      const highResBase64 = highResDataUrl.replace(/^data:image\/png;base64,/, '')
+      const assetId = useAssetStore.getState().registerAsset({
+        type: 'image',
+        base64: highResBase64,
+        alt: '이미지 크롭',
+        sourceBlock: targetBlockId,
+        sourcePage: curPage,
+      })
+      const imgHtml = `<img data-asset-id="${assetId}" src="${highResDataUrl}" alt="이미지 크롭" style="max-width: 100%;" />`
+      // 접힌 블록이면 자동 펼기
+      const { collapsedBlockIds, toggleBlockCollapse } = useAppStore.getState()
+      if (collapsedBlockIds.has(targetBlockId)) {
+        toggleBlockCollapse(targetBlockId)
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('auza:insertAtCursor', {
+            detail: { blockId: targetBlockId, html: imgHtml },
+          }))
+        }, 100)
+      } else {
+        window.dispatchEvent(new CustomEvent('auza:insertAtCursor', {
+          detail: { blockId: targetBlockId, html: imgHtml },
+        }))
+      }
+      return
+    }
+
+    setLastCapture({ base64, blockId: targetBlockId, captureBboxNorm })
+
+    // v2.1 OD Review Step: OD ON + Review ON → detect만 실행 후 리뷰 오버레이 표시
+    if (odEnabled && odReviewEnabled && window.electronAPI.detectRegions) {
+      setCaptureLoading(true)
+      setCaptureError(null)
+      setOdProgress(null)
+
+      const result = await window.electronAPI.detectRegions(base64)
+
+      setCaptureLoading(false)
+      setOdProgress(null)
+
+      if (result.error) {
+        setCaptureError(result.error)
+        return
+      }
+
+      const { pdfPath, currentPage } = useAppStore.getState()
+
+      // 클라이언트 UUID 부여
+      const detections: OdDetection[] = (result.detections as OdDetection[]).map((d, idx) => ({
+        ...d,
+        id: d.id || `od_${Date.now()}_${idx}`,
+      }))
+
+      setPendingReview({
+        imageBase64: base64,
+        imageWidth: result.imageWidth,
+        imageHeight: result.imageHeight,
+        pdfPath: pdfPath || null,
+        pageNum: pdfPath ? currentPage - 1 : 0,
+        captureBboxNorm: captureBboxNorm || [],
+        blockId: targetBlockId,
+        detections,
+      })
+      return
+    }
 
     await performCapture(base64, targetBlockId, captureBboxNorm)
-  }, [dragRect, pageCanvas, scale, setCaptureError, performCapture])
+  }, [dragRect, pageCanvas, scale, setCaptureError, performCapture, imgCropMode, odEnabled, odReviewEnabled])
 
-  // 재시도 핸들러
+  // v2.1 OD Review: 편집 완료 → convert 실행
+  const handleReviewConfirm = useCallback(async (editedDetections: OdDetection[]) => {
+    if (!pendingReview) return
+    const review = pendingReview
+    setPendingReview(null)
+
+    // ── 디버그: 전송되는 detections 확인 ──
+    console.warn('[OD Review] 변환 요청:', {
+      총개수: editedDetections.length,
+      원본개수: review.detections.length,
+      regions: editedDetections.map(d => ({ id: d.id, region: d.region, score: d.score })),
+    })
+
+    setCaptureLoading(true)
+    setCaptureError(null)
+    setOdProgress(null)
+
+    const result = await window.electronAPI.convertRegions({
+      imageBase64: review.imageBase64,
+      detections: editedDetections,
+      pdfPath: review.pdfPath || undefined,
+      pageNum: review.pageNum,
+      captureBboxNorm: review.captureBboxNorm,
+    })
+
+    setCaptureLoading(false)
+    setOdProgress(null)
+
+    if (result.error || !result.html) {
+      setCaptureError(result.error || '인식 결과가 비어 있습니다.')
+      // 재시도 시 편집된 detections 보존
+      setPendingReview({ ...review, detections: editedDetections })
+      return
+    }
+
+    let html = stripCodeFences(result.html)
+
+    // Asset Store에 캡처 스크린샷 등록
+    const { currentPage } = useAppStore.getState()
+    useAssetStore.getState().registerAsset({
+      type: 'capture',
+      base64: review.imageBase64,
+      alt: '캡처 영역',
+      sourceBlock: review.blockId,
+      sourcePage: currentPage,
+    })
+
+    // HTML 내 data-asset-id가 없는 이미지에 개별 Asset ID 부여
+    html = html.replace(
+      /<img(?![^>]*data-asset-id)\s([^>]*>)/gi,
+      (_match, rest: string) => {
+        const srcMatch = rest.match(/src="data:image\/[^;]+;base64,([^"]+)"/)
+        const imgAssetId = useAssetStore.getState().registerAsset({
+          type: 'image',
+          base64: srcMatch?.[1] || '',
+          alt: 'OD 생성 이미지',
+          sourceBlock: review.blockId,
+          sourcePage: currentPage,
+        })
+        return `<img data-asset-id="${imgAssetId}" ${rest}`
+      },
+    )
+
+    // OD 결과를 블록에 저장 (재편집용)
+    useAppStore.getState().saveOdData(review.blockId, {
+      imageBase64: review.imageBase64,
+      imageWidth: review.imageWidth,
+      imageHeight: review.imageHeight,
+      pdfPath: review.pdfPath,
+      pageNum: review.pageNum,
+      captureBboxNorm: review.captureBboxNorm,
+      detections: editedDetections,
+    })
+
+    // 블록 삽입
+    const blockStillExists = useAppStore.getState().blocks.some((b) => b.id === review.blockId)
+    if (!blockStillExists) return
+
+    const { collapsedBlockIds, toggleBlockCollapse } = useAppStore.getState()
+    if (collapsedBlockIds.has(review.blockId)) {
+      toggleBlockCollapse(review.blockId)
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('auza:insertHtml', {
+          detail: { blockId: review.blockId, html },
+        }))
+      }, 100)
+    } else {
+      window.dispatchEvent(new CustomEvent('auza:insertHtml', {
+        detail: { blockId: review.blockId, html },
+      }))
+    }
+  }, [pendingReview, setCaptureLoading, setCaptureError])
+
+  // 재시도 핸들러 — review 실패 시 편집본 detections로 convert 재실행
   const handleRetry = useCallback(async () => {
+    if (pendingReview) {
+      // OD Review 경로: 보존된 편집본 detections로 convert 재호출
+      await handleReviewConfirm(pendingReview.detections)
+      return
+    }
     if (!lastCapture) return
-    const { base64, blockId } = lastCapture
-    await performCapture(base64, blockId)
-  }, [lastCapture, performCapture])
+    const { base64, blockId, captureBboxNorm } = lastCapture
+    await performCapture(base64, blockId, captureBboxNorm)
+  }, [lastCapture, performCapture, pendingReview, handleReviewConfirm])
+
+  // v2.1 OD Review: 취소
+  const handleReviewCancel = useCallback(() => {
+    setPendingReview(null)
+  }, [])
 
   // 재시도 버튼을 PdfViewer의 에러 배너에서 사용할 수 있도록 window에 등록
   useEffect(() => {
@@ -423,31 +730,66 @@ export default function AreaCapture({ pageCanvas, scale }: Props) {
       {/* 캡처 모드 안내 배지 */}
       {!isDraggingRef.current && !captureLoading && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none">
-          <div className="bg-orange-500/90 text-white text-xs px-3 py-1 rounded-full shadow">
-            드래그하여 캡처 영역을 선택하세요
+          <div className={`text-white text-xs px-3 py-1 rounded-full shadow ${imgCropMode ? 'bg-green-500/90' : 'bg-orange-500/90'}`}>
+            {imgCropMode ? '드래그하여 이미지를 크롭하세요' : '드래그하여 캡처 영역을 선택하세요'}
           </div>
         </div>
       )}
 
-      {/* OD 토글 버튼 — 오버레이 위에 별도 배치하여 클릭 가능 */}
+      {/* OD 토글 + IMG 크롭 버튼 */}
       {!isDraggingRef.current && !captureLoading && (
         <div
-          className="absolute top-2 right-2 z-50"
+          className="absolute top-2 right-2 z-50 flex gap-1.5"
           onMouseDown={(e) => e.stopPropagation()}
           onMouseUp={(e) => e.stopPropagation()}
         >
+          <button
+            className={`text-xs px-2.5 py-1 rounded-full shadow transition-colors cursor-pointer ${
+              imgCropMode
+                ? 'bg-green-500 text-white'
+                : 'bg-white/90 text-gray-600 hover:bg-gray-100'
+            }`}
+            onClick={() => { setImgCropMode(!imgCropMode); if (!imgCropMode) setOdEnabled(false) }}
+            title={imgCropMode ? '이미지 크롭 모드 ON — 드래그 영역을 이미지로 삽입' : '이미지 크롭 모드 OFF'}
+          >
+            {imgCropMode ? 'IMG ON' : 'IMG'}
+          </button>
           <button
             className={`text-xs px-2.5 py-1 rounded-full shadow transition-colors cursor-pointer ${
               odEnabled
                 ? 'bg-blue-500 text-white'
                 : 'bg-white/90 text-gray-600 hover:bg-gray-100'
             }`}
-            onClick={() => setOdEnabled(!odEnabled)}
+            onClick={() => { setOdEnabled(!odEnabled); if (!odEnabled) setImgCropMode(false) }}
             title={odEnabled ? 'OD 레이아웃 분석 ON' : 'OD 레이아웃 분석 OFF'}
           >
             {odEnabled ? 'OD ON' : 'OD OFF'}
           </button>
+          {odEnabled && (
+            <button
+              className={`text-xs px-2.5 py-1 rounded-full shadow transition-colors cursor-pointer ${
+                odReviewEnabled
+                  ? 'bg-purple-500 text-white'
+                  : 'bg-white/90 text-gray-600 hover:bg-gray-100'
+              }`}
+              onClick={() => setOdReviewEnabled(!odReviewEnabled)}
+              title={odReviewEnabled ? 'OD Review ON — 검출 결과 확인 후 변환' : 'OD Review OFF — 자동 변환'}
+            >
+              {odReviewEnabled ? 'Review ON' : 'Review'}
+            </button>
+          )}
         </div>
+      )}
+
+      {/* v2.1 OD Review Overlay */}
+      {pendingReview && (
+        <OdReviewOverlay
+          detections={pendingReview.detections}
+          captureBase64={pendingReview.imageBase64}
+          captureImageSize={{ w: pendingReview.imageWidth, h: pendingReview.imageHeight }}
+          onConfirm={handleReviewConfirm}
+          onCancel={handleReviewCancel}
+        />
       )}
 
       {captureLoading && (

@@ -1,6 +1,6 @@
 {
   "name": "auza",
-  "version": "1.0.3",
+  "version": "2.2.0",
   "description": "AUZA — PDF-to-Document 스마트 작성기",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "electron:dev": "vite",
-    "electron:build": "tsc --noEmit && vite build && electron-builder",
+    "electron:build": "tsc --noEmit && vite build && electron-builder --win nsis",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -27,6 +27,7 @@
     "@tiptap/pm": "^2.11.0",
     "@tiptap/react": "^2.11.0",
     "@tiptap/starter-kit": "^2.11.0",
+    "electron-updater": "^6.8.3",
     "katex": "^0.16.11",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

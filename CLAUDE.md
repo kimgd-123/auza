@@ -15,8 +15,12 @@ React Renderer (UI) ↔ IPC ↔ Electron Main ↔ child_process (stdin/stdout JS
 - **공통 정규화기**: Vision/채팅 모든 경로 → 정규화기 → TipTap 호환 노드 변환 후 에디터 삽입
 - **내보내기**: ProseMirror JSON → HTML 직렬화 → html_parser.py → DocumentStructure → Writer (Strategy 패턴)
 - **수식**: Whitelist(분수/루트/첨자/합/적분/극한/괄호/기호 220+) + 미지원 → 이미지 fallback
-- **HWP**: GetActiveObject 연결만 (v1), 커서 끝 아니면 알럿, 블록 순서 변경 ≠ HWP 변경
-- **세션**: %APPDATA%/AUZA/session.json 자동 저장 (ProseMirror JSON)
+- **HWP**: GetActiveObject + ROT 모니커 연결, 커서 끝 아니면 알럿, 블록 순서 변경 ≠ HWP 변경
+- **HWP 테이블**: TreatAsChar=1 + PageBreak=1 (본문 흐름 따름, 단/페이지 넘김 허용)
+- **boxed_text(글상자)**: 1×1 래퍼 테이블 → 풀어서 개별 문단으로 삽입 + ParagraphShape > BorderFill로 문단 테두리 재현 (단 넘김 가능)
+- **CharShape 리셋**: 서식 적용 텍스트 삽입 후 반드시 Bold/Italic/Underline/Color 초기화 (번짐 방지)
+- **Python 패키지**: 시작 시 bs4/pywin32/Pillow 자동 체크 + pip install (테스터 PC 대응)
+- **세션**: %APPDATA%/AUZA-v2/session.json 자동 저장 (ProseMirror JSON)
 
 ## to Claude
 1. Thinking은 반드시 한국어로 진행, compacted 후에도 이 규칙 준수
@@ -48,4 +52,6 @@ React Renderer (UI) ↔ IPC ↔ Electron Main ↔ child_process (stdin/stdout JS
 - **한글 오토메이션 문서**: `C:\Users\kaeli\Downloads\docling_pj\HANCOM개발가이드문서\`
 - **Paser_Exam_pj** (`C:\Project\Paser_Exam_pj`): 수식 파이프라인 포팅 (latex-normalizer, latex-to-hwp, fix_equation_width)
 - **docling_pj** (`C:\Users\kaeli\Downloads\docling_pj`): PDF 좌표/JSON 중간구조/오프스크린 렌더링 설계 참조
-- **Gemini API 키**: `.env.local` (개발) / `%APPDATA%/AUZA/config.json` (배포) — `.env.local`은 exe 패키징 제외
+- **Gemini API 키**: `.env.local` (개발) / `%APPDATA%/AUZA-v2/config.json` (배포) — `.env.local`은 exe 패키징 제외
+- **Python 의존성**: `python/requirements.txt` (beautifulsoup4, pywin32, Pillow)
+- **HWP COM 속성 참고**: ParagraphShape > `Item("BorderFill")` → `SetItem("BorderTypeTop/Bottom/Left/Right", 1)` 로 문단 테두리 설정

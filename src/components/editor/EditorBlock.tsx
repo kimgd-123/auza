@@ -7,14 +7,17 @@ import { exportBlockToHwp, checkHwpConnection } from '@/lib/export-hwp'
 interface Props {
   block: EditorBlockType
   index: number
+  collapsed: boolean
+  onToggleCollapse: () => void
   onDragStart: (index: number) => void
   onDragOver: (e: React.DragEvent, index: number) => void
   onDrop: (index: number) => void
 }
 
-export default function EditorBlock({ block, index, onDragStart, onDragOver, onDrop }: Props) {
+export default function EditorBlock({ block, index, collapsed, onToggleCollapse, onDragStart, onDragOver, onDrop }: Props) {
   const { activeBlockId, setActiveBlockId, updateBlock, removeBlock } = useAppStore()
   const isActive = activeBlockId === block.id
+  const hasOdData = useAppStore((s) => !!s.savedOdData[block.id])
   const [isDraggable, setIsDraggable] = useState(false)
   const [hwpWriting, setHwpWriting] = useState(false)
   const blockRef = useRef<HTMLDivElement>(null)
@@ -48,6 +51,11 @@ export default function EditorBlock({ block, index, onDragStart, onDragOver, onD
     }
   }
 
+  const handleCollapse = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    onToggleCollapse()
+  }
+
   // 핸들에서만 draggable 활성화
   const enableDrag = useCallback(() => setIsDraggable(true), [])
   const disableDrag = useCallback(() => setIsDraggable(false), [])
@@ -66,8 +74,19 @@ export default function EditorBlock({ block, index, onDragStart, onDragOver, onD
       onDrop={() => onDrop(index)}
     >
       {/* 블록 헤더 */}
-      <div className="flex items-center px-3 py-2 border-b border-gray-100 bg-gray-50 rounded-t-lg">
-        {/* 드래그 핸들 — 여기서만 drag 시작 */}
+      <div className={`flex items-center px-3 py-2 border-b border-gray-100 bg-gray-50 ${collapsed ? 'rounded-lg' : 'rounded-t-lg'}`}>
+        {/* 접기/펴기 토글 */}
+        <button
+          onClick={handleCollapse}
+          className="mr-1 p-0.5 text-gray-400 hover:text-gray-600 transition-colors"
+          title={collapsed ? '펴기' : '접기'}
+        >
+          <svg className={`w-3.5 h-3.5 transition-transform ${collapsed ? '' : 'rotate-90'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+
+        {/* 드래그 핸들 */}
         <div
           className="cursor-grab active:cursor-grabbing mr-2 text-gray-300 hover:text-gray-500"
           title="드래그하여 순서 변경"
@@ -92,6 +111,18 @@ export default function EditorBlock({ block, index, onDragStart, onDragOver, onD
           placeholder="블록 제목 (선택)"
           className="flex-1 text-sm bg-transparent outline-none text-gray-700 placeholder:text-gray-300"
         />
+        {hasOdData && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              useAppStore.getState().setReReviewBlockId(block.id)
+            }}
+            className="ml-2 px-2 py-0.5 text-xs rounded bg-orange-500 text-white hover:bg-orange-600 transition-colors"
+            title="OD 검출 결과 재편집 및 AI 재변환"
+          >
+            OD
+          </button>
+        )}
         <button
           onClick={handleWriteHwp}
           disabled={hwpWriting}
@@ -115,13 +146,15 @@ export default function EditorBlock({ block, index, onDragStart, onDragOver, onD
         </button>
       </div>
 
-      {/* TipTap 에디터 */}
-      <RichEditor
-        blockId={block.id}
-        content={block.content}
-        onUpdate={(content) => updateBlock(block.id, { content })}
-        isActive={isActive}
-      />
+      {/* TipTap 에디터 — 접힌 상태면 숨김 */}
+      {!collapsed && (
+        <RichEditor
+          blockId={block.id}
+          content={block.content}
+          onUpdate={(content) => updateBlock(block.id, { content })}
+          isActive={isActive}
+        />
+      )}
     </div>
   )
 }

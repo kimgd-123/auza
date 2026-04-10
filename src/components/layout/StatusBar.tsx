@@ -4,7 +4,7 @@ import { useAppStore } from '@/stores/appStore'
 const HWP_POLL_INTERVAL = 15_000 // 15초마다 연결 상태 확인
 
 export default function StatusBar() {
-  const { blocks, hwpConnected, setHwpConnected, hwpExporting, hwpExportError, setHwpExportError, currentPage, totalPages } = useAppStore()
+  const { blocks, hwpConnected, setHwpConnected, hwpExporting, hwpExportError, setHwpExportError, currentPage, totalPages, openReleaseNotes } = useAppStore()
   const [connecting, setConnecting] = useState(false)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -44,7 +44,7 @@ export default function StatusBar() {
 
   return (
     <div className="flex items-center h-7 px-4 bg-gray-100 border-t border-gray-200 text-xs text-gray-500 gap-4 flex-shrink-0">
-      <span className="flex items-center gap-1">
+      <span data-tutorial="hwp-connect" className="flex items-center gap-1">
         HWP: {hwpConnected ? (
           <span className="text-green-600 font-medium">연결됨</span>
         ) : (
@@ -80,7 +80,13 @@ export default function StatusBar() {
         </span>
       )}
       <div className="flex-1" />
-      <span>AUZA v1.0</span>
+      <button
+        onClick={() => openReleaseNotes(false)}
+        className="hover:text-blue-600 hover:underline"
+        title="업데이트 내역 보기"
+      >
+        AUZA v{__APP_VERSION__}
+      </button>
     </div>
   )
 }

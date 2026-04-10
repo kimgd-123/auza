@@ -1,5 +1,7 @@
 import { useEffect } from 'react'
 import MainLayout from './components/layout/MainLayout'
+import OdReReviewModal from './components/editor/OdReReviewModal'
+import ReleaseNotesDialog from './components/layout/ReleaseNotesDialog'
 import { useSessionAutoSave, useSessionRecovery } from './lib/use-session'
 import { useAppStore } from './stores/appStore'
 
@@ -89,11 +91,27 @@ function AutoSaveProvider({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function ReleaseNotesDialogHost() {
+  const { releaseNotesOpen, releaseNotesAutoShown, closeReleaseNotes } = useAppStore()
+  // 닫힐 때 완전히 unmount → 다음 열림 시 selectedVersion이 항상 최신 버전으로 초기화됨
+  // (Codex recheck #2에서 잡은 회귀: 이전 선택 버전이 그대로 유지되던 문제)
+  if (!releaseNotesOpen) return null
+  return (
+    <ReleaseNotesDialog
+      open={true}
+      onClose={closeReleaseNotes}
+      autoShown={releaseNotesAutoShown}
+    />
+  )
+}
+
 function App() {
   return (
     <AutoSaveProvider>
       <SessionRecoveryDialog />
       <MainLayout />
+      <OdReReviewModal />
+      <ReleaseNotesDialogHost />
     </AutoSaveProvider>
   )
 }

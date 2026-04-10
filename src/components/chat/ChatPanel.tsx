@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@/stores/appStore'
-import { prosemirrorToHtml } from '@/lib/prosemirror-to-html'
+import { buildContext } from '@/lib/context-builder'
+import { generationIrToHtml } from '@/lib/generation-ir-to-html'
+import PresetSelector from './PresetSelector'
 import type { ChatMessage } from '@/types'
+import type { Preset, HwpGenerationIR } from '@/types/generation'
 
 function stripCodeFences(text: string): string {
   let s = text.trim()
@@ -47,13 +50,17 @@ export default function ChatPanel() {
     setInput('')
     setLoadingBlockId(sendBlockId)
 
-    // 현재 블록 내용을 컨텍스트로 전달
+    // 일반 채팅은 Summary Layer만 전송 (비용 최적화 — PRD §13.4.3)
     let context: string | undefined
-    if (activeBlock?.content) {
-      try {
-        const doc = JSON.parse(activeBlock.content)
-        context = prosemirrorToHtml(doc)
-      } catch { /* ignore */ }
+    const { blocks: allBlocks, selectedBlockIds } = useAppStore.getState()
+    const blockIdSet = new Set(allBlocks.map((b) => b.id))
+    const validSelected = new Set([...selectedBlockIds].filter((id) => blockIdSet.has(id)))
+    const effectiveIds = validSelected.size > 0
+      ? validSelected
+      : sendBlockId ? new Set([sendBlockId]) : new Set<string>()
+    const ctxResult = buildContext(allBlocks, effectiveIds)
+    if (ctxResult.summaryOnly) {
+      context = ctxResult.summaryOnly
     }
 
     // 채팅 히스토리를 Gemini 형식으로 변환
@@ -80,6 +87,115 @@ export default function ChatPanel() {
     addChatMessage(sendBlockId, assistantMsg)
   }, [input, activeBlockId, activeBlock, loadingBlockId, addChatMessage])
 
+  // 선택된 프리셋 (생성 모드)
+  const [activePreset, setActivePreset] = useState<Preset | null>(null)
+  const [generating, setGenerating] = useState(false)
+
+  // 프리셋 선택 시 기본 프롬프트를 입력란에 채우고 프리셋 활성화
+  const handlePresetSelect = useCallback((preset: Preset) => {
+    setActivePreset(preset)
+    setInput(preset.defaultUserPrompt)
+  }, [])
+
+  // 프리셋 생성 실행
+  const handleGenerate = useCallback(async () => {
+    if (!activePreset || !input.trim() || !activeBlockId || generating) return
+    if (!window.electronAPI?.geminiGenerate) return
+
+    const sendBlockId = activeBlockId
+    setGenerating(true)
+
+    // 컨텍스트 빌드
+    const { blocks: allBlocks, selectedBlockIds } = useAppStore.getState()
+    const blockIdSet = new Set(allBlocks.map((b) => b.id))
+    const validSelected = new Set([...selectedBlockIds].filter((id) => blockIdSet.has(id)))
+    const effectiveIds = validSelected.size > 0
+      ? validSelected
+      : sendBlockId ? new Set([sendBlockId]) : new Set<string>()
+    const ctxResult = buildContext(allBlocks, effectiveIds)
+
+    // 채팅에 사용자 메시지 표시
+    const userMsg: ChatMessage = {
+      id: `msg-${Date.now()}`,
+      role: 'user',
+      content: `[${activePreset.icon} ${activePreset.name}] ${input.trim()}`,
+      timestamp: Date.now(),
+    }
+    addChatMessage(sendBlockId, userMsg)
+    setInput('')
+
+    const result = await window.electronAPI.geminiGenerate({
+      context: ctxResult.text,
+      presetId: activePreset.id,
+      presetSystemPrompt: activePreset.systemPrompt,
+      outputSchema: activePreset.outputSchemaDescription,
+      outputExample: activePreset.outputExample,
+      userInstruction: input.trim(),
+    })
+
+    setGenerating(false)
+
+    const blockStillExists = useAppStore.getState().blocks.some((b) => b.id === sendBlockId)
+    if (!blockStillExists) return
+
+    if (result.error || !result.ir) {
+      addChatMessage(sendBlockId, {
+        id: `msg-${Date.now()}`,
+        role: 'assistant',
+        content: `생성 실패: ${result.error || '알 수 없는 오류'}`,
+        timestamp: Date.now(),
+      })
+      return
+    }
+
+    // Generation IR → HTML → 새 에디터 블록에 삽입
+    const ir = result.ir as unknown as HwpGenerationIR
+    console.log('[Generate] IR:', JSON.stringify(ir, null, 2).slice(0, 2000))
+    console.log('[Generate] effectiveIds:', [...effectiveIds])
+    const html = generationIrToHtml(ir, [...effectiveIds])
+    console.log('[Generate] HTML preview:', html.slice(0, 500))
+    const sectionTitle = ir.sections?.[0]?.title || activePreset.name
+
+    // 새 블록 생성 — 선택 블록 중 마지막 뒤에 삽입
+    const store = useAppStore.getState()
+    const selectedIds = [...store.selectedBlockIds]
+    let lastSelectedId: string | undefined
+    if (selectedIds.length > 0) {
+      // blocks 배열에서 선택된 블록 중 가장 뒤에 있는 것
+      for (let i = store.blocks.length - 1; i >= 0; i--) {
+        if (selectedIds.includes(store.blocks[i].id)) {
+          lastSelectedId = store.blocks[i].id
+          break
+        }
+      }
+    }
+    store.addBlock(lastSelectedId)
+    const newBlocks = useAppStore.getState().blocks
+    // afterBlockId로 삽입했으면 해당 위치+1, 아니면 마지막
+    const insertIdx = lastSelectedId
+      ? newBlocks.findIndex((b) => b.id === lastSelectedId) + 1
+      : newBlocks.length - 1
+    const newBlock = newBlocks[insertIdx] || newBlocks[newBlocks.length - 1]
+    if (newBlock) {
+      useAppStore.getState().updateBlock(newBlock.id, {
+        title: `[생성] ${sectionTitle}`,
+      })
+      // store에 pending HTML 저장 → RichEditor mount 시 소비
+      useAppStore.getState().setPendingBlockHtml(newBlock.id, html)
+      useAppStore.getState().setActiveBlockId(newBlock.id)
+    }
+
+    // 성공 메시지
+    addChatMessage(sendBlockId, {
+      id: `msg-${Date.now()}`,
+      role: 'assistant',
+      content: `${activePreset.icon} "${sectionTitle}" 생성 완료! 새 블록에서 확인하세요.\n\n수정 후 "HWP" 버튼으로 내보낼 수 있습니다.`,
+      timestamp: Date.now(),
+    })
+
+    setActivePreset(null)
+  }, [activePreset, input, activeBlockId, generating, addChatMessage])
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -94,10 +210,44 @@ export default function ChatPanel() {
     const html = stripCodeFences(messageContent)
     if (!html) return
 
+    // 접힌 블록이면 자동 펼기
+    const { collapsedBlockIds, toggleBlockCollapse } = useAppStore.getState()
+    if (collapsedBlockIds.has(activeBlockId)) {
+      toggleBlockCollapse(activeBlockId)
+      // 렌더 후 이벤트 발행을 위해 약간 지연
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('auza:insertHtml', {
+          detail: { blockId: activeBlockId, html },
+        }))
+      }, 100)
+      return
+    }
+
     // 에디터 컴포넌트가 리스닝하는 커스텀 이벤트 발행
     window.dispatchEvent(new CustomEvent('auza:insertHtml', {
       detail: { blockId: activeBlockId, html },
     }))
+  }, [activeBlockId])
+
+  // AI 응답을 새 블록에 추가
+  const handleApplyToNewBlock = useCallback((messageContent: string) => {
+    if (!activeBlockId) return
+
+    const html = stripCodeFences(messageContent)
+    if (!html) return
+
+    const store = useAppStore.getState()
+    // 현재 활성 블록 뒤에 새 블록 추가
+    store.addBlock(activeBlockId)
+    const newBlocks = useAppStore.getState().blocks
+    const idx = newBlocks.findIndex((b) => b.id === activeBlockId)
+    const newBlock = newBlocks[idx + 1]
+    if (!newBlock) return
+
+    // 새 블록에 제목 설정 + 활성화
+    useAppStore.getState().updateBlock(newBlock.id, { title: '[채팅] AI 응답' })
+    useAppStore.getState().setPendingBlockHtml(newBlock.id, html)
+    useAppStore.getState().setActiveBlockId(newBlock.id)
   }, [activeBlockId])
 
   return (
@@ -135,13 +285,21 @@ export default function ChatPanel() {
                 }`}
               >
                 <div className="whitespace-pre-wrap break-words">{msg.content}</div>
-                {msg.role === 'assistant' && (
-                  <button
-                    onClick={() => handleApply(msg.content)}
-                    className="mt-2 text-xs text-blue-600 hover:text-blue-800 font-medium"
-                  >
-                    에디터에 적용
-                  </button>
+                {msg.role === 'assistant' && !msg.content.includes('생성 완료!') && !msg.content.startsWith('생성 실패:') && (
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      onClick={() => handleApply(msg.content)}
+                      className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                    >
+                      에디터에 적용
+                    </button>
+                    <button
+                      onClick={() => handleApplyToNewBlock(msg.content)}
+                      className="text-xs text-green-600 hover:text-green-800 font-medium"
+                    >
+                      새블록에 추가
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -163,23 +321,69 @@ export default function ChatPanel() {
 
       {/* 입력 영역 */}
       <div className="border-t border-gray-200 p-3 flex-shrink-0">
-        <div className="flex gap-2">
+        {/* 프리셋 활성 표시 */}
+        {activePreset && (
+          <div className="flex items-center gap-2 mb-2 px-2 py-1 bg-purple-50 rounded-md text-xs text-purple-700">
+            <span>{activePreset.icon} {activePreset.name}</span>
+            <button
+              onClick={() => setActivePreset(null)}
+              className="ml-auto text-purple-400 hover:text-purple-600"
+            >
+              취소
+            </button>
+          </div>
+        )}
+        <div className="flex gap-2 items-end">
+          <PresetSelector
+            onSelect={handlePresetSelect}
+            disabled={!activeBlock || loading || generating}
+          />
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={activeBlock ? '메시지를 입력하세요...' : '블록을 먼저 선택하세요'}
-            disabled={!activeBlock || loading}
-            className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:border-blue-400 disabled:bg-gray-50 disabled:text-gray-300"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                if (activePreset) handleGenerate()
+                else handleSend()
+              }
+            }}
+            placeholder={
+              !activeBlock ? '블록을 먼저 선택하세요'
+              : activePreset ? `${activePreset.name} 지시사항...`
+              : '메시지를 입력하세요...'
+            }
+            disabled={!activeBlock || loading || generating}
+            className={`flex-1 px-3 py-2 text-sm border rounded-lg outline-none disabled:bg-gray-50 disabled:text-gray-300 ${
+              activePreset ? 'border-purple-300 focus:border-purple-500' : 'border-gray-200 focus:border-blue-400'
+            }`}
           />
-          <button
-            onClick={handleSend}
-            disabled={!activeBlock || !input.trim() || loading}
-            className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
-          >
-            전송
-          </button>
+          {activePreset ? (
+            <button
+              onClick={handleGenerate}
+              disabled={!activeBlock || !input.trim() || generating}
+              className="px-4 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+            >
+              {generating ? (
+                <>
+                  <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+                    <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="opacity-75" />
+                  </svg>
+                  생성 중
+                </>
+              ) : '생성'}
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={!activeBlock || !input.trim() || loading}
+              className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+            >
+              전송
+            </button>
+          )}
         </div>
       </div>
     </div>

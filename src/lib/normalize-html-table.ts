@@ -64,12 +64,15 @@ function wrapOrphanRows(container: HTMLElement) {
 
 function normalizeTable(table: HTMLTableElement) {
   // thead/tbody/tfoot 풀기 — 안에 있는 tr을 table 직속으로 이동
-  const sections = table.querySelectorAll('thead, tbody, tfoot')
-  sections.forEach((section) => {
-    while (section.firstChild) {
-      table.insertBefore(section.firstChild, section)
+  // ⚠️ 직속 자식만 선택 (중첩 테이블의 section을 건드리면 insertBefore 에러)
+  Array.from(table.children).forEach((section) => {
+    const tag = section.tagName
+    if (tag === 'THEAD' || tag === 'TBODY' || tag === 'TFOOT') {
+      while (section.firstChild) {
+        table.insertBefore(section.firstChild, section)
+      }
+      section.remove()
     }
-    section.remove()
   })
 
   // table 직속 자식 중 tr이 아닌 td/th가 있으면 tr로 감싸기

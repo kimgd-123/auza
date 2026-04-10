@@ -16,6 +16,24 @@ from utils.style_utils import hex_to_rgb_int, estimate_text_width_mm, HWPUNIT_PE
 from utils.math_patterns import COMBINED_MATH_RE
 
 
+def _html_to_lines(html: str) -> str:
+    """HTML 줄바꿈 태그를 \\n으로 변환 후 나머지 태그 제거
+
+    주의: <보기>, <보 기> 같은 한국어 꺾쇠 표현은 HTML 태그가 아니므로 보존해야 함.
+    HTML 태그는 영문자 또는 /로 시작하므로 해당 패턴만 매칭합니다.
+    """
+    # HTML 엔티티를 먼저 디코딩 (&lt; → <, &gt; → >)
+    text = html.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+    # 줄바꿈 태그 → \n
+    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</(?:p|div|li|tr)>', '\n', text, flags=re.IGNORECASE)
+    # HTML 태그만 제거 (영문자 또는 /로 시작하는 것만)
+    text = re.sub(r'<[a-zA-Z/!][^>]*>', '', text)
+    # 연속 빈 줄 정리
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 class HwpWriter(BaseWriter):
     def __init__(self):
         self._hwp = None
@@ -220,7 +238,7 @@ class HwpWriter(BaseWriter):
             for i, item in enumerate(doc.items):
                 try:
                     if item.item_type == 'paragraph' and item.paragraph:
-                        self._write_paragraph(hwp, item.paragraph)
+                        self._write_paragraph(hwp, item.paragraph, border=item.border)
                         written += 1
                     elif item.item_type == 'table' and item.table:
                         self._write_table(hwp, item.table)
@@ -244,8 +262,12 @@ class HwpWriter(BaseWriter):
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def _write_paragraph(self, hwp, para: Paragraph):
-        """문단 작성"""
+    def _write_paragraph(self, hwp, para: Paragraph, border: str = None):
+        """문단 작성. border: 'all'|'top'|'bottom'|'mid'|None"""
+        # 문단 테두리 설정 (boxed_text 풀린 경우)
+        if border:
+            self._set_para_border(hwp, border)
+
         # 제목이면 스타일 적용
         if para.heading_level > 0:
             style_name = f"개요 {para.heading_level}"
@@ -267,39 +289,64 @@ class HwpWriter(BaseWriter):
         act = hwp.CreateAction("BreakPara")
         act.Run()
 
+        # 테두리 해제 — 다음 문단에 번지지 않도록
+        if border and border in ('all', 'bottom'):
+            self._set_para_border(hwp, None)
+
     def _write_text_run(self, hwp, run: TextRun):
         """서식이 적용된 텍스트 런 작성"""
         if not run.text:
             return
 
         # 서식 설정
-        act = hwp.CreateAction("CharShape")
-        pset = act.CreateSet()
-        act.GetDefault(pset)
+        has_style = run.bold or run.italic or run.underline or run.color or run.font_size
+        if has_style:
+            try:
+                act = hwp.CreateAction("CharShape")
+                pset = act.CreateSet()
+                act.GetDefault(pset)
+                if pset is None:
+                    raise RuntimeError("CreateSet returned None")
 
-        if run.bold:
-            pset.SetItem("Bold", 1)
-        if run.italic:
-            pset.SetItem("Italic", 1)
-        if run.underline:
-            pset.SetItem("UnderlineType", 1)
-        if run.color:
-            rgb = hex_to_rgb_int(run.color)
-            if rgb is not None:
-                pset.SetItem("TextColor", rgb)
-        if run.font_size:
-            # HWP 폰트 크기: pt × 100
-            pset.SetItem("Height", run.font_size * 100)
+                if run.bold:
+                    pset.SetItem("Bold", 1)
+                if run.italic:
+                    pset.SetItem("Italic", 1)
+                if run.underline:
+                    pset.SetItem("UnderlineType", 1)
+                if run.color:
+                    rgb = hex_to_rgb_int(run.color)
+                    if rgb is not None:
+                        pset.SetItem("TextColor", rgb)
+                if run.font_size:
+                    # HWP 폰트 크기: pt × 100
+                    pset.SetItem("Height", run.font_size * 100)
 
-        act.Execute(pset)
+                act.Execute(pset)
+            except Exception as e:
+                sys.stderr.write(f"[hwp-writer] CharShape failed: {e}, inserting text without style\n")
 
         # 텍스트 삽입
         hwp.HAction.GetDefault("InsertText", hwp.HParameterSet.HInsertText.HSet)
         hwp.HParameterSet.HInsertText.Text = run.text
         hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
 
-    def _write_table(self, hwp, table: TableData):
-        """표 작성"""
+        # 서식 리셋 — 다음 런에 스타일이 번지지 않도록
+        if has_style:
+            try:
+                act = hwp.CreateAction("CharShape")
+                pset = act.CreateSet()
+                act.GetDefault(pset)
+                pset.SetItem("Bold", 0)
+                pset.SetItem("Italic", 0)
+                pset.SetItem("UnderlineType", 0)
+                pset.SetItem("TextColor", 0)  # 검정
+                act.Execute(pset)
+            except Exception:
+                pass
+
+    def _write_table(self, hwp, table: TableData, nested: bool = False):
+        """표 작성. nested=True이면 다른 표 셀 안에서 호출된 중첩 테이블."""
         row_count = len(table.rows)
         col_count = table.col_count or (max(sum(c.colspan for c in row) for row in table.rows) if table.rows else 1)
 
@@ -309,8 +356,11 @@ class HwpWriter(BaseWriter):
             actual_col = 0
             for cell in row:
                 if actual_col < col_count:
-                    content = re.sub(r'<[^>]+>', '', cell.content).strip()
-                    width_mm = estimate_text_width_mm(content) + 8  # 양쪽 패딩
+                    content = _html_to_lines(cell.content)
+                    # 줄바꿈 있으면 가장 긴 줄 기준으로 폭 계산
+                    lines = content.split('\n') if '\n' in content else [content]
+                    max_line = max(lines, key=lambda l: estimate_text_width_mm(l))
+                    width_mm = estimate_text_width_mm(max_line) + 8  # 양쪽 패딩
                     col_max_mm[actual_col] = max(col_max_mm[actual_col], width_mm)
                 actual_col += cell.colspan
 
@@ -369,9 +419,9 @@ class HwpWriter(BaseWriter):
 
         tbl_props = pset.Item("TableProperties")
         tbl_props.SetItem("Width", page_width)
-        # 다단 설정 시 TreatAsChar=0 (표 단 넘김 허용), 1단은 TreatAsChar=1 (순서 유지)
-        is_multi_col = self._get_column_width(hwp) < self._get_body_width(hwp)
-        tbl_props.SetItem("TreatAsChar", 0 if is_multi_col else 1)
+        # TreatAsChar=1: 글자처럼 취급 — 본문 흐름(단/페이지)을 따름
+        # TreatAsChar=0이면 플로팅 객체가 되어 2단 레이아웃에서 단 넘김이 안 됨
+        tbl_props.SetItem("TreatAsChar", 1)
         tbl_props.SetItem("PageBreak", 1)    # 페이지/단 경계에서 나눔 허용
         pset.SetItem("TableProperties", tbl_props)
 
@@ -440,17 +490,20 @@ class HwpWriter(BaseWriter):
                         except Exception:
                             pass
 
-                    # 셀 내용 (HTML 태그 제거 후 텍스트+수식 분리 삽입)
-                    content = re.sub(r'<[^>]+>', '', cell_data.content).strip()
-                    if content:
-                        if cell_data.bold:
-                            act = hwp.CreateAction("CharShape")
-                            pset = act.CreateSet()
-                            act.GetDefault(pset)
-                            pset.SetItem("Bold", 1)
-                            act.Execute(pset)
+                    # 셀 내용: 중첩 테이블이 있으면 재귀 파싱하여 작성
+                    if '<table' in cell_data.content.lower():
+                        self._write_rich_cell(hwp, cell_data)
+                    else:
+                        content = _html_to_lines(cell_data.content)
+                        if content:
+                            if cell_data.bold:
+                                act = hwp.CreateAction("CharShape")
+                                pset = act.CreateSet()
+                                act.GetDefault(pset)
+                                pset.SetItem("Bold", 1)
+                                act.Execute(pset)
 
-                        self._insert_text_with_math(hwp, content)
+                            self._insert_text_with_linebreaks(hwp, content)
 
                 # 다음 셀로 이동 (마지막 셀 제외)
                 is_last = (row_idx == row_count - 1 and col_idx == col_count - 1)
@@ -468,10 +521,27 @@ class HwpWriter(BaseWriter):
                 sys.stderr.write(f"[hwp-writer] merge ({r},{c}) FAILED: {e}\n")
 
         # 표 밖으로 나가기
-        act = hwp.CreateAction("TableLowerCell")
-        act.Run()
-        act = hwp.CreateAction("MoveDown")
-        act.Run()
+        if nested:
+            # 중첩 테이블: 바깥 셀 안에 머물러야 하므로 TableLowerCell+MoveDown
+            try:
+                act = hwp.CreateAction("TableLowerCell")
+                act.Run()
+                act = hwp.CreateAction("MoveDown")
+                act.Run()
+            except Exception:
+                pass
+        else:
+            # 최외곽 테이블: 문서 끝으로 이동 (블록은 항상 문서 끝에 추가)
+            try:
+                hwp.HAction.Run("MoveDocEnd")
+            except Exception:
+                try:
+                    act = hwp.CreateAction("TableLowerCell")
+                    act.Run()
+                    act = hwp.CreateAction("MoveDown")
+                    act.Run()
+                except Exception:
+                    pass
 
     def _merge_cells(self, hwp, row: int, col: int, rowspan: int, colspan: int,
                      base_list: int = 0, total_cols: int = 1):
@@ -517,6 +587,70 @@ class HwpWriter(BaseWriter):
             hwp.HParameterSet.HInsertText.Text = remaining
             hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
 
+    def _write_rich_cell(self, hwp, cell_data):
+        """중첩 테이블이 포함된 셀 내용을 재귀 파싱하여 HWP에 작성
+
+        1×1 래퍼 테이블(boxed_text)의 셀에 텍스트+표+수식이 혼합된 경우,
+        HTML을 DocumentStructure로 파싱하고 각 아이템을 순차 작성합니다.
+        HWP 테이블 셀 안에 중첩 테이블을 생성하는 것이 가능합니다.
+        """
+        from parsers.html_parser import parse_html
+
+        inner_doc = parse_html(cell_data.content)
+        sys.stderr.write(f"[hwp-writer] rich cell: {len(inner_doc.items)} items\n")
+
+        for i, item in enumerate(inner_doc.items):
+            try:
+                if item.item_type == 'paragraph' and item.paragraph:
+                    self._write_paragraph(hwp, item.paragraph)
+                elif item.item_type == 'table' and item.table:
+                    self._write_table(hwp, item.table, nested=True)
+                elif item.item_type == 'image' and item.image:
+                    self._write_image(hwp, item.image)
+                elif item.item_type == 'math_block' and item.math:
+                    self._write_equation(hwp, item.math)
+            except Exception as e:
+                sys.stderr.write(f"[hwp-writer] rich cell item {i} error: {e}\n")
+
+    def _insert_text_with_linebreaks(self, hwp, content: str):
+        """\\n을 HWP BreakPara로 변환하여 줄바꿈 포함 텍스트 삽입"""
+        lines = content.split('\n')
+        for i, line in enumerate(lines):
+            if line:
+                self._insert_text_with_math(hwp, line)
+            if i < len(lines) - 1:
+                hwp.HAction.Run("BreakPara")
+
+    def _set_para_border(self, hwp, border: str = None):
+        """문단 테두리 설정 — boxed_text 풀림 시 시각적 테두리 재현
+
+        border: 'all'=상하좌우, 'top'=상좌우, 'bottom'=하좌우, 'mid'=좌우만, None=해제
+        ParagraphShape > BorderFill 서브셋으로 설정
+        """
+        try:
+            act = hwp.CreateAction("ParagraphShape")
+            pset = act.CreateSet()
+            act.GetDefault(pset)
+
+            bf = pset.Item("BorderFill")
+            if not bf:
+                return
+
+            top = 1 if border in ('all', 'top') else 0
+            bottom = 1 if border in ('all', 'bottom') else 0
+            left = 1 if border in ('all', 'top', 'bottom', 'mid') else 0
+            right = 1 if border in ('all', 'top', 'bottom', 'mid') else 0
+
+            bf.SetItem("BorderTypeTop", top)
+            bf.SetItem("BorderTypeBottom", bottom)
+            bf.SetItem("BorderTypeLeft", left)
+            bf.SetItem("BorderTypeRight", right)
+
+            pset.SetItem("BorderFill", bf)
+            act.Execute(pset)
+        except Exception as e:
+            sys.stderr.write(f"[hwp-writer] para border failed: {e}\n")
+
     def _set_cell_bg(self, hwp, hex_color: str):
         """셀 배경색 설정 (TableCellBorderFill)"""
         rgb = hex_to_rgb_int(hex_color)
@@ -530,7 +664,7 @@ class HwpWriter(BaseWriter):
         hwp.HAction.Execute("CellBorderFill", hwp.HParameterSet.HCellBorderFill.HSet)
 
     def _write_image(self, hwp, image: ImageData):
-        """이미지 삽입 — base64 → 본문 너비에 맞춰 리사이즈 → 임시 파일 → InsertFile
+        """이미지 삽입 — base64 → PIL로 단 너비에 맞춰 리사이즈 → 임시 파일 → InsertFile
 
         Raises:
             Exception: base64 디코딩 실패 또는 COM InsertFile 실패 시
@@ -541,16 +675,35 @@ class HwpWriter(BaseWriter):
         import io
         from PIL import Image
 
-        # base64 → 임시 PNG 파일
+        # base64 → PIL Image
         img_bytes = base64.b64decode(image.base64)
+        pil_img = Image.open(io.BytesIO(img_bytes))
+
+        # 단 너비(HWPUNIT) → mm → 목표 픽셀 너비 계산 (150 DPI 기준)
+        target_w_hwpunit = self._get_column_width(hwp)
+        target_w_mm = target_w_hwpunit * 25.4 / 7200
+        target_dpi = 150
+        target_w_px = int(target_w_mm / 25.4 * target_dpi)
+
+        orig_w, orig_h = pil_img.size
+        if orig_w > 0 and orig_w != target_w_px:
+            ratio = target_w_px / orig_w
+            target_h_px = int(orig_h * ratio)
+            pil_img = pil_img.resize((target_w_px, target_h_px), Image.LANCZOS)
+            sys.stderr.write(f"[hwp-writer] PIL image resized: "
+                             f"{orig_w}x{orig_h} → {target_w_px}x{target_h_px}px "
+                             f"(target {target_w_mm:.0f}mm @ {target_dpi}DPI)\n")
+
+        # DPI 메타데이터 설정하여 HWP가 정확한 크기로 표시하도록 함
+        pil_img.info['dpi'] = (target_dpi, target_dpi)
 
         tmp_path = None
         try:
             fd, tmp_path = tempfile.mkstemp(suffix='.png', prefix='auza_img_')
-            os.write(fd, img_bytes)
             os.close(fd)
+            pil_img.save(tmp_path, format='PNG', dpi=(target_dpi, target_dpi))
 
-            # 1단계: InsertFile로 이미지 삽입
+            # InsertFile로 이미지 삽입
             hwp.HAction.GetDefault("InsertFile", hwp.HParameterSet.HInsertFile.HSet)
             hwp.HParameterSet.HInsertFile.filename = tmp_path
             hwp.HParameterSet.HInsertFile.KeepSection = 0
@@ -559,13 +712,15 @@ class HwpWriter(BaseWriter):
             if not result:
                 raise RuntimeError(f"InsertFile(image) COM 호출 실패: {tmp_path}")
 
-            # 2단계: 삽입된 이미지를 단 너비에 맞춰 리사이즈
+            # 삽입된 이미지를 글자처럼 취급 + 크기 보정
             import time
             time.sleep(0.2)
-            target_w = self._get_column_width(hwp)
 
             try:
-                hwp.HAction.Run("MoveLeft")
+                # 단락 분리 후 선택: 인접 인라인 이미지 간 MoveLeft 오선택 방지
+                hwp.HAction.Run("BreakPara")   # 이미지 뒤에 빈 단락 삽입
+                hwp.HAction.Run("MoveLeft")    # 빈 단락 → 이미지 단락으로 이동
+                hwp.HAction.Run("MoveLeft")    # 이미지 앞으로 이동
                 hwp.HAction.Run("SelectCtrlFront")
                 time.sleep(0.1)
                 ctrl = hwp.CurSelectedCtrl
@@ -573,23 +728,28 @@ class HwpWriter(BaseWriter):
                     props = ctrl.Properties
                     cur_w = props.Item("Width")
                     cur_h = props.Item("Height")
-                    if cur_w > 0 and cur_w > target_w:
-                        ratio = target_w / cur_w
+                    # COM으로도 단 너비에 맞춤 (이중 안전장치)
+                    if cur_w > 0 and cur_w != target_w_hwpunit:
+                        ratio = target_w_hwpunit / cur_w
                         new_h = int(cur_h * ratio)
-                        props.SetItem("Width", target_w)
+                        props.SetItem("Width", target_w_hwpunit)
                         props.SetItem("Height", new_h)
-                        sys.stderr.write(f"[hwp-writer] image resized: "
-                                         f"{cur_w}x{cur_h} → {target_w}x{new_h} HWPUNIT "
-                                         f"({target_w*25.4/7200:.0f}x{new_h*25.4/7200:.0f}mm)\n")
+                        sys.stderr.write(f"[hwp-writer] COM image resized: "
+                                         f"{cur_w}x{cur_h} → {target_w_hwpunit}x{new_h} HWPUNIT\n")
+                    else:
+                        sys.stderr.write(f"[hwp-writer] COM image already at target width\n")
                     # 글자처럼 취급 설정
                     props.SetItem("TreatAsChar", 1)
                     ctrl.Properties = props
                     sys.stderr.write("[hwp-writer] image TreatAsChar=1\n")
                     hwp.HAction.Run("Cancel")
-                    # 이미지 뒤로 커서 이동
-                    hwp.HAction.Run("MoveRight")
+                else:
+                    sys.stderr.write("[hwp-writer] WARNING: CurSelectedCtrl is None\n")
+                # 이미지+빈단락 뒤로 커서 이동
+                hwp.HAction.Run("MoveLineEnd")
+                hwp.HAction.Run("MoveRight")
             except Exception as e:
-                sys.stderr.write(f"[hwp-writer] image resize failed: {e}\n")
+                sys.stderr.write(f"[hwp-writer] image post-process failed: {e}\n")
                 try:
                     hwp.HAction.Run("Cancel")
                 except Exception:

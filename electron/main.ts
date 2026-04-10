@@ -1,7 +1,8 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
 import path from 'path'
 import fs from 'fs/promises'
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { autoUpdater } from 'electron-updater'
 import { startPythonProcess, stopPythonProcess, sendPythonCommand } from './python-bridge'
 
 let mainWindow: BrowserWindow | null = null
@@ -11,7 +12,7 @@ const allowedPdfPaths = new Set<string>()
 
 // 세션 파일 경로
 function getSessionPath(): string {
-  return path.join(app.getPath('appData'), 'AUZA', 'session.json')
+  return path.join(app.getPath('appData'), 'AUZA-v2', 'session.json')
 }
 
 function createWindow() {
@@ -40,7 +41,63 @@ function createWindow() {
   })
 }
 
-app.whenReady().then(createWindow)
+// 단일 인스턴스 보장 — 두 번째 실행 시 기존 창에 포커스만 주고 종료.
+// in-process config 직렬화 큐(updateConfig)는 단일 main 프로세스에서만 유효하므로,
+// 다중 인스턴스 실행 시 config.json race를 방지하기 위해 필수.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+  })
+}
+
+app.whenReady().then(() => {
+  // Electron 기본 메뉴 제거
+  Menu.setApplicationMenu(null)
+  createWindow()
+
+  // ── 자동 업데이트 (production만) ──
+  if (!process.env.VITE_DEV_SERVER_URL) {
+    autoUpdater.autoDownload = true
+    autoUpdater.autoInstallOnAppQuit = true
+
+    autoUpdater.on('update-available', (info) => {
+      mainWindow?.webContents.send('update:available', info.version)
+    })
+
+    autoUpdater.on('download-progress', (progress) => {
+      mainWindow?.webContents.send('update:progress', Math.round(progress.percent))
+    })
+
+    autoUpdater.on('update-downloaded', (info) => {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'info',
+        title: '업데이트 준비 완료',
+        message: `새 버전 ${info.version}이 다운로드되었습니다.\n지금 재시작하여 업데이트하시겠습니까?`,
+        buttons: ['지금 재시작', '나중에'],
+        defaultId: 0,
+      }).then(({ response }) => {
+        if (response === 0) {
+          autoUpdater.quitAndInstall()
+        }
+      })
+    })
+
+    autoUpdater.on('error', (err) => {
+      console.error('[auto-updater] 업데이트 체크 실패:', err.message)
+    })
+
+    // 앱 시작 후 3초 뒤 업데이트 확인
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(() => {})
+    }, 3000)
+  }
+})
 
 app.on('window-all-closed', () => {
   stopPythonProcess()
@@ -95,9 +152,9 @@ ipcMain.handle('file:readPdf', async (_event, filePath: string) => {
 
 // ── 테스트용 내장 API 키 (정식 릴리즈 시 삭제) ──
 // TODO: 정식 릴리즈 전 아래 줄을 삭제하세요
-const TEST_EMBEDDED_API_KEY = '***REMOVED***'
+const TEST_EMBEDDED_API_KEY = '' // 배포용: 사용자가 설정에서 API 키 입력
 
-// Gemini API 키 로딩: 내장키 → .env.local → %APPDATA%/AUZA/config.json
+// Gemini API 키 로딩: 내장키 → .env.local → %APPDATA%/AUZA-v2/config.json
 async function loadGeminiApiKey(): Promise<string | null> {
   // 0. 테스트용 내장 키 (정식 릴리즈 시 삭제)
   if (TEST_EMBEDDED_API_KEY) return TEST_EMBEDDED_API_KEY
@@ -110,9 +167,9 @@ async function loadGeminiApiKey(): Promise<string | null> {
     if (match?.[1]?.trim()) return match[1].trim()
   } catch { /* not found */ }
 
-  // 2. %APPDATA%/AUZA/config.json
+  // 2. %APPDATA%/AUZA-v2/config.json
   try {
-    const configPath = path.join(app.getPath('appData'), 'AUZA', 'config.json')
+    const configPath = path.join(app.getPath('appData'), 'AUZA-v2', 'config.json')
     const configContent = await fs.readFile(configPath, 'utf-8')
     const config = JSON.parse(configContent)
     if (config.geminiApiKey) return config.geminiApiKey
@@ -172,15 +229,21 @@ ipcMain.handle(
 
       // 시스템 프롬프트 + 컨텍스트 구성
       const systemParts: string[] = [
-        '당신은 문서 작성을 돕는 AI 어시스턴트입니다.',
-        '사용자가 요청하면 텍스트를 수정하거나, 표를 생성/편집하거나, 내용을 요약할 수 있습니다.',
+        '당신은 교수학습자료 작성을 돕는 AI 어시스턴트입니다.',
+        '사용자가 요청하면 텍스트를 수정하거나, 표를 생성/편집하거나, 내용을 요약하거나, 학습자료를 생성할 수 있습니다.',
         '응답은 HTML 형식으로 해주세요. 표는 <table> 태그를, 수식은 $...$ 또는 $$...$$ 형식을 사용하세요.',
         '절대 <html>, <head>, <body>, <!DOCTYPE> 태그를 포함하지 마세요. 본문 콘텐츠만 반환하세요.',
         '표를 만들 때 <thead>, <tbody>를 사용하지 말고 <table> 안에 <tr>과 <th>/<td>만 사용하세요.',
         'HTML만 반환하고 마크다운 코드블록(```)으로 감싸지 마세요.',
+        '',
+        '## 컨텍스트 구조',
+        '아래에 "블록 목록"(요약)과 "선택된 블록 상세"(Markdown 전문)가 제공됩니다.',
+        '- 블록 이름 옆 *가 붙은 항목이 사용자가 선택한 블록입니다.',
+        '- [asset:ID] 형태의 참조는 이미지를 의미합니다. 이미지 내용을 직접 볼 수 없으니 문맥으로 판단하세요.',
+        '- 사용자가 "이 내용"이라고 하면 선택된 블록 전체를 참조하세요.',
       ]
       if (payload.context) {
-        systemParts.push(`\n현재 에디터 블록 내용:\n${payload.context}`)
+        systemParts.push(`\n---\n${payload.context}`)
       }
 
       // Gemini chat history 구성
@@ -201,6 +264,101 @@ ipcMain.handle(
       return { text: text || null, error: text ? null : '응답이 비어 있습니다.' }
     } catch (err) {
       return { text: null, error: (err as Error).message }
+    }
+  },
+)
+
+// IPC: Gemini 자료 생성 — 프리셋 기반 schema-validated JSON 출력 (Phase 10)
+ipcMain.handle(
+  'gemini:generate',
+  async (
+    _event,
+    payload: {
+      context: string          // 2계층 컨텍스트 (buildContext 결과)
+      presetId: string         // 프리셋 ID
+      presetSystemPrompt: string  // 프리셋 시스템 프롬프트
+      outputSchema: string     // JSON 스키마 설명
+      outputExample: string    // 출력 예시
+      userInstruction: string  // 사용자 지시
+    },
+  ) => {
+    try {
+      const apiKey = await loadGeminiApiKey()
+      if (!apiKey) {
+        return { ir: null, error: 'Gemini API 키가 설정되지 않았습니다.' }
+      }
+
+      const genAI = new GoogleGenerativeAI(apiKey)
+      const model = genAI.getGenerativeModel({ model: 'gemini-3.1-pro-preview' })
+
+      // PRD §13.6.2 생성 프롬프트 계약
+      const systemPrompt = [
+        payload.presetSystemPrompt,
+        '',
+        '## 출력 JSON 스키마',
+        payload.outputSchema,
+        '',
+        '## 출력 예시',
+        payload.outputExample,
+        '',
+        '## 컨텍스트 (선택 블록 내용)',
+        payload.context,
+      ].join('\n')
+
+      const chat = model.startChat({
+        systemInstruction: { role: 'system' as const, parts: [{ text: systemPrompt }] },
+      })
+
+      const result = await chat.sendMessage(payload.userInstruction)
+      let text = result.response.text()
+
+      if (!text) {
+        return { ir: null, error: '생성 결과가 비어 있습니다.' }
+      }
+
+      // JSON 코드블록 래퍼 제거
+      text = text.trim()
+      if (text.startsWith('```json')) text = text.slice(7)
+      else if (text.startsWith('```')) text = text.slice(3)
+      if (text.endsWith('```')) text = text.slice(0, -3)
+      text = text.trim()
+
+      // JSON 파싱 검증
+      let ir
+      try {
+        ir = JSON.parse(text)
+      } catch {
+        return { ir: null, rawText: text, error: 'Gemini 출력이 유효한 JSON이 아닙니다.' }
+      }
+
+      // 기본 스키마 검증
+      if (!ir.type || !ir.sections) {
+        return { ir: null, rawText: text, error: 'Generation IR 스키마가 올바르지 않습니다 (type, sections 필수).' }
+      }
+
+      return { ir, error: null }
+    } catch (err) {
+      return { ir: null, error: (err as Error).message }
+    }
+  },
+)
+
+// IPC: Generation IR → HWP 직접 작성 (Python 백엔드 경유)
+ipcMain.handle(
+  'hwp:writeFromIR',
+  async (
+    _event,
+    payload: {
+      irJson: Record<string, unknown>
+      mathMappings: Record<string, string>
+      assets: Record<string, string>  // {asset_id: base64}
+    },
+  ) => {
+    const result = await sendPythonCommand('write_hwp_from_ir', payload)
+    return {
+      success: result.success,
+      data: result.data,
+      error: result.error,
     }
   },
 )
@@ -229,14 +387,14 @@ ipcMain.handle('capture:analyze', async (_event, imageBase64: string, options?: 
       return { html: null, regions: 0, error: 'Gemini API 키가 설정되지 않았습니다.' }
     }
 
-    // OD 분석은 모델 로드 + 다중 Gemini 호출로 오래 걸릴 수 있어 5분 타임아웃
+    // OD 분석: 첫 실행 시 패키지 설치(~10분) + 모델 로드 + Gemini 호출 → 15분 타임아웃
     const result = await sendPythonCommand('od_analyze', {
       imageBase64,
       apiKey,
       pdfPath: options?.pdfPath || '',
       pageNum: options?.pageNum ?? -1,
       captureBboxNorm: options?.captureBboxNorm || null,
-    }, 300_000)
+    }, 900_000)
 
     if (!result.success || !result.data) {
       return { html: null, regions: 0, error: result.error || 'OD 분석에 실패했습니다.' }
@@ -253,11 +411,97 @@ ipcMain.handle('capture:analyze', async (_event, imageBase64: string, options?: 
   }
 })
 
+// IPC: OD 검출만 수행 (Gemini 호출 없음) — v2.1 OD Review Step
+ipcMain.handle('capture:detect', async (_event, imageBase64: string) => {
+  try {
+    // cold start: 첫 실행 시 패키지 설치(~10분) + 모델 로드 → 15분 타임아웃
+    const result = await sendPythonCommand('od_detect', { imageBase64 }, 900_000)
+    if (!result.success || !result.data) {
+      return { detections: [], imageWidth: 0, imageHeight: 0, error: result.error || 'OD 검출 실패' }
+    }
+    const data = result.data as { detections: unknown[]; imageWidth: number; imageHeight: number; error: string | null }
+    return {
+      detections: data.detections || [],
+      imageWidth: data.imageWidth || 0,
+      imageHeight: data.imageHeight || 0,
+      error: data.error || null,
+    }
+  } catch (err) {
+    return { detections: [], imageWidth: 0, imageHeight: 0, error: (err as Error).message }
+  }
+})
+
+// IPC: 사용자 편집된 detections 기반 Gemini 변환 + figure 후처리 — v2.1 OD Review Step
+ipcMain.handle('capture:convert', async (_event, payload: {
+  imageBase64: string; detections: unknown[]; pdfPath?: string; pageNum?: number; captureBboxNorm?: number[]
+}) => {
+  try {
+    const apiKey = await loadGeminiApiKey()
+    if (!apiKey) {
+      return { html: null, regions: 0, error: 'Gemini API 키가 설정되지 않았습니다.' }
+    }
+    const result = await sendPythonCommand('od_convert', {
+      imageBase64: payload.imageBase64,
+      detections: payload.detections,
+      apiKey,
+      pdfPath: payload.pdfPath || '',
+      pageNum: payload.pageNum ?? -1,
+      captureBboxNorm: payload.captureBboxNorm || null,
+    }, 300_000)
+    if (!result.success || !result.data) {
+      return { html: null, regions: 0, error: result.error || '변환에 실패했습니다.' }
+    }
+    const data = result.data as { html: string; regions: number; error: string | null }
+    return {
+      html: data.html || null,
+      regions: data.regions || 0,
+      error: data.error || null,
+    }
+  } catch (err) {
+    return { html: null, regions: 0, error: (err as Error).message }
+  }
+})
+
 // ── HWP 연동 IPC ──
 
-// Python 백엔드 시작 (앱 초기화 시)
-app.whenReady().then(() => {
-  startPythonProcess()
+// Python 백엔드 시작 + OD 패키지 사전 설치 (앱 초기화 시)
+app.whenReady().then(async () => {
+  try {
+    await startPythonProcess()
+
+    // renderer 로드 완료 대기 후 OD 패키지 설치
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win) return
+
+    const sendStatus = (status: string, error?: string) => {
+      try { win.webContents.send('od:package-status', { status, error }) } catch { /* ignore */ }
+    }
+
+    // renderer가 로드된 후 실행
+    const startInstall = async () => {
+      // React 마운트 대기 (1초)
+      await new Promise((r) => setTimeout(r, 1000))
+      sendStatus('checking')
+
+      const result = await sendPythonCommand('ensure_od_packages', {}, 900_000)
+
+      if (result.success && (result.data as { installed: boolean })?.installed) {
+        sendStatus('ready')
+        console.log('[main] OD 패키지 설치 완료')
+      } else {
+        sendStatus('error', result.error || 'OD 패키지 설치 실패')
+        console.error('[main] OD 패키지 설치 실패:', result.error)
+      }
+    }
+
+    if (win.webContents.isLoading()) {
+      win.webContents.once('did-finish-load', () => startInstall())
+    } else {
+      startInstall()
+    }
+  } catch (err) {
+    console.error('[main] Python 시작 실패:', (err as Error).message)
+  }
 })
 
 // IPC: HWP 수동 연결 (사용자 트리거)
@@ -335,6 +579,51 @@ ipcMain.handle('session:allowPdf', async (_event, filePath: string) => {
   }
 })
 
+// ── 공용 config.json 접근 계층 ──
+// 단일 config 파일(%APPDATA%/AUZA-v2/config.json)에 대한 read-modify-write를
+// 프로세스 내부 Promise 큐로 직렬화하고 tmp-write/rename으로 원자적 저장.
+// geminiApiKey, lastSeenVersion 등 모든 필드 저장은 이 경로를 거쳐야 race 없이
+// 병합된다. (Codex F2 대응)
+
+function getConfigPath(): string {
+  return path.join(app.getPath('appData'), 'AUZA-v2', 'config.json')
+}
+
+async function readConfigRaw(): Promise<Record<string, unknown>> {
+  try {
+    const raw = await fs.readFile(getConfigPath(), 'utf-8')
+    const parsed = JSON.parse(raw)
+    return typeof parsed === 'object' && parsed !== null ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+async function writeConfigAtomic(config: Record<string, unknown>): Promise<void> {
+  const configPath = getConfigPath()
+  await fs.mkdir(path.dirname(configPath), { recursive: true })
+  const tmpPath = configPath + '.tmp'
+  await fs.writeFile(tmpPath, JSON.stringify(config, null, 2), 'utf-8')
+  await fs.rename(tmpPath, configPath)
+}
+
+// 프로세스 내 직렬화 큐: 모든 read-modify-write를 한 번에 하나씩 처리
+let configWriteQueue: Promise<unknown> = Promise.resolve()
+
+function updateConfig<T>(
+  mutator: (config: Record<string, unknown>) => T | Promise<T>,
+): Promise<T> {
+  const next = configWriteQueue.then(async () => {
+    const config = await readConfigRaw()
+    const result = await mutator(config)
+    await writeConfigAtomic(config)
+    return result
+  })
+  // 큐 자체는 실패해도 이어져야 하므로 rejection을 삼킨다
+  configWriteQueue = next.catch(() => undefined)
+  return next
+}
+
 // ── Gemini API 키 설정 IPC ──
 
 ipcMain.handle('config:getApiKey', async () => {
@@ -344,18 +633,39 @@ ipcMain.handle('config:getApiKey', async () => {
 
 ipcMain.handle('config:saveApiKey', async (_event, apiKey: string) => {
   try {
-    const configDir = path.join(app.getPath('appData'), 'AUZA')
-    const configPath = path.join(configDir, 'config.json')
-    await fs.mkdir(configDir, { recursive: true })
+    await updateConfig((config) => {
+      config.geminiApiKey = apiKey.trim()
+    })
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: (err as Error).message }
+  }
+})
 
-    let config: Record<string, unknown> = {}
-    try {
-      const existing = await fs.readFile(configPath, 'utf-8')
-      config = JSON.parse(existing)
-    } catch { /* first time */ }
+// ── 릴리즈 노트 표시 이력 (lastSeenVersion) ──
+// 버전 업 후 첫 실행 시 ReleaseNotesDialog 자동 표시 여부 결정
 
-    config.geminiApiKey = apiKey.trim()
-    await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8')
+// IPC: 현재 앱 버전 반환
+ipcMain.handle('app:getVersion', () => {
+  return app.getVersion()
+})
+
+// IPC: 마지막으로 사용자가 본 릴리즈 노트 버전
+ipcMain.handle('app:getLastSeenVersion', async () => {
+  try {
+    const config = await readConfigRaw()
+    return { version: (config.lastSeenVersion as string) || null }
+  } catch {
+    return { version: null }
+  }
+})
+
+// IPC: 사용자가 본 릴리즈 노트 버전 저장
+ipcMain.handle('app:setLastSeenVersion', async (_event, version: string) => {
+  try {
+    await updateConfig((config) => {
+      config.lastSeenVersion = version
+    })
     return { success: true }
   } catch (err) {
     return { success: false, error: (err as Error).message }

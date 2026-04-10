@@ -21,7 +21,7 @@ export const SYMBOL_MAP: Record<string, string> = {
   '\\times': 'times', '\\div': 'div', '\\cdot': 'cdot', '\\pm': '+-', '\\mp': '-+',
   '\\ast': '*', '\\star': 'star', '\\circ': 'circ', '\\bullet': 'bullet',
   '\\cap': 'cap', '\\cup': 'cup', '\\vee': 'vee', '\\wedge': 'wedge',
-  '\\oplus': 'oplus', '\\otimes': 'otimes', '\\odot': 'odot',
+  '\\oplus': 'oplus', '\\otimes': 'otimes', '\\odot': 'odot', '\\bigcirc': 'bigcirc',
 
   // 관계 연산자
   '\\leq': 'leq', '\\le': 'leq', '\\geq': 'geq', '\\ge': 'geq',
