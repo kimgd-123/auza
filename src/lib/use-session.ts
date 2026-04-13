@@ -97,7 +97,8 @@ export function useSessionRecovery() {
       const pdfPathToRestore = pendingSession.pdfPath
       window.electronAPI?.allowPdf?.(pdfPathToRestore).then((res) => {
         if (res?.success) {
-          useAppStore.getState().setPdfPath(pdfPathToRestore)
+          // canonical path 사용 — allowlist와 store가 동일한 경로를 참조
+          useAppStore.getState().setPdfPath(res.canonicalPath || pdfPathToRestore)
         } else {
           console.warn('[session] PDF 복구 실패:', pdfPathToRestore)
           setPdfRecoveryError(`블록은 복구되었지만 PDF를 찾지 못했습니다: ${pdfPathToRestore}`)

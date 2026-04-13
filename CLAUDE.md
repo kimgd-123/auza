@@ -19,8 +19,12 @@ React Renderer (UI) ↔ IPC ↔ Electron Main ↔ child_process (stdin/stdout JS
 - **HWP 테이블**: TreatAsChar=1 + PageBreak=1 (본문 흐름 따름, 단/페이지 넘김 허용)
 - **boxed_text(글상자)**: 1×1 래퍼 테이블 → 풀어서 개별 문단으로 삽입 + ParagraphShape > BorderFill로 문단 테두리 재현 (단 넘김 가능)
 - **CharShape 리셋**: 서식 적용 텍스트 삽입 후 반드시 Bold/Italic/Underline/Color 초기화 (번짐 방지)
-- **Python 패키지**: 시작 시 bs4/pywin32/Pillow 자동 체크 + pip install (테스터 PC 대응)
+- **Gemini SDK**: `google-genai` (신규) — VisionClient 인터페이스 + GeminiDirectClient (api_key별 캐싱, 재시도/timeout)
+- **Gemini 병렬화**: ThreadPoolExecutor로 Gemini 호출만 병렬, figure/PyMuPDF는 메인 스레드 순차 유지
+- **부분 성공**: 프런트엔드는 `html`이 있으면 삽입 진행, `error`는 비차단 경고 (console.warn)
+- **Python 패키지**: 시작 시 bs4/pywin32/Pillow/google-genai 자동 체크 + pip install (테스터 PC 대응)
 - **세션**: %APPDATA%/AUZA-v2/session.json 자동 저장 (ProseMirror JSON)
+- **자동 업데이트**: electron-updater + GitHub Releases, 앱 시작 3초 후 체크
 
 ## to Claude
 1. Thinking은 반드시 한국어로 진행, compacted 후에도 이 규칙 준수
@@ -43,6 +47,7 @@ React Renderer (UI) ↔ IPC ↔ Electron Main ↔ child_process (stdin/stdout JS
 18. 재검증도 기본적으로 비동기이며, `scripts/Get-CodexCrossCheckStatus.ps1 -Target "<bundle>" -Mode recheck`로 상태를 확인한다
 19. 최종 완료 선언 전에는 반드시 recheck가 끝났는지 확인하고, 남은 finding이 있으면 모두 해소한다
 20. 자동 호출이 권한 문제로 막히면 사용자에게 승인 요청 후 계속 진행
+21. **빌드 전 릴리즈 노트 필수**: `npm run electron:build` 실행 전에 반드시 `src/data/releaseNotes.ts`에 해당 버전의 릴리즈 노트 항목을 추가해야 한다. version은 `package.json`과 일치해야 하며, 누락 시 사용자가 업데이트 후 릴리즈 노트를 확인할 수 없다
 
 ## 참조
 - **PRD**: `doc/PRD_AUZA_HWP작성기.md`
@@ -53,5 +58,10 @@ React Renderer (UI) ↔ IPC ↔ Electron Main ↔ child_process (stdin/stdout JS
 - **Paser_Exam_pj** (`C:\Project\Paser_Exam_pj`): 수식 파이프라인 포팅 (latex-normalizer, latex-to-hwp, fix_equation_width)
 - **docling_pj** (`C:\Users\kaeli\Downloads\docling_pj`): PDF 좌표/JSON 중간구조/오프스크린 렌더링 설계 참조
 - **Gemini API 키**: `.env.local` (개발) / `%APPDATA%/AUZA-v2/config.json` (배포) — `.env.local`은 exe 패키징 제외
-- **Python 의존성**: `python/requirements.txt` (beautifulsoup4, pywin32, Pillow)
+- **Python 의존성**: `python/requirements.txt` (beautifulsoup4, pywin32, Pillow, PyMuPDF, google-genai)
+- **Gemini SDK**: `google-genai>=0.8` (신규 SDK, `google-generativeai`는 EOL)
+- **VisionClient**: `python/od/vision_client.py` — GeminiDirectClient (api_key별 캐싱, 재시도, timeout)
+- **병렬화**: `python/od/analyzer.py` — ThreadPoolExecutor (기본 4워커), figure/PyMuPDF는 메인 스레드 순차
+- **Feature Flag**: `AUZA_GEMINI_PARALLEL_DISABLE=1` (순차 fallback), `AUZA_GEMINI_PARALLEL=N` (워커 수 1~10)
+- **자동 업데이트**: electron-updater + GitHub Releases (`latest.yml`)
 - **HWP COM 속성 참고**: ParagraphShape > `Item("BorderFill")` → `SetItem("BorderTypeTop/Bottom/Left/Right", 1)` 로 문단 테두리 설정

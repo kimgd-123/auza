@@ -1,8 +1,8 @@
-# AUZA v2.1 — PDF → 한/글(HWP) 자동 변환 도구
+# AUZA v2 — PDF → 한/글(HWP) 자동 변환 도구
 
 **작성자:** 김규동 CP  
-**최종 수정일:** 2026-04-06  
-**버전:** 2.1.6
+**최종 수정일:** 2026-04-13  
+**버전:** 2.2.1
 
 ---
 
@@ -40,7 +40,7 @@ PDF 파일 열기
 |------|------|------|
 | 화면(UI) | Electron + React | 데스크톱 프로그램 화면 구성 |
 | 문서 분석 | DocLayout-YOLO | PDF 페이지에서 텍스트/표/이미지 영역 자동 감지 |
-| AI 보조 | Google Gemini API | 표 구조 분석, 수식 인식, 교육자료 생성 |
+| AI 보조 | Google Gemini API (`google-genai` SDK) | 표 구조 분석, 수식 인식, 교육자료 생성 |
 | PDF 처리 | PyMuPDF | PDF에서 텍스트·좌표·이미지 추출 |
 | 한/글 입력 | pyhwpx (COM 자동화) | 한/글 프로그램을 원격 조작하여 내용 자동 입력 |
 | 편집기 | TipTap | 프로그램 내 문서 편집 기능 (표, 수식 포함) |
@@ -53,7 +53,7 @@ PDF 파일 열기
 ### 사전 준비
 - **운영체제:** Windows 10 또는 11 (64비트)
 - **한/글:** 한컴오피스 한/글 2014 이상 설치 필요
-- **Python:** 3.10 이상 설치 필요 (필수 패키지는 앱 시작 시 자동 설치)
+- **Python:** 내장 Python 3.12 포함 (별도 설치 불필요, 필수 패키지 앱 시작 시 자동 설치)
 - **Gemini API 키:** 첫 실행 시 프로그램에서 입력 안내
 
 ### 개발 환경에서 실행
@@ -77,8 +77,7 @@ npm run electron:build
 ```
 
 생성되는 파일:
-- `release/설치버전/AUZA-v2 Setup X.X.X.exe` — 설치 프로그램
-- `release/무설치버전/AUZA-v2-X.X.X-portable.exe` — 설치 없이 바로 실행 가능한 버전
+- `release/설치버전/AUZA-v2 Setup X.X.X.exe` — 설치 프로그램 (자동 업데이트 지원)
 
 ### 사용 순서
 1. 프로그램 실행 → Gemini API 키 입력 (최초 1회)
@@ -100,7 +99,9 @@ npm run electron:build
 | 스타일링 | Tailwind CSS 3.4 |
 | 상태관리 | Zustand 5.0 |
 | 패키징 | electron-builder 25 |
-| 백엔드 | Python 3.11.9 |
+| 백엔드 | Python 3.12 (embed 번들) |
+| AI SDK | google-genai >=0.8 |
+| 자동 업데이트 | electron-updater (GitHub Releases) |
 
 ### 주요 폴더 구조
 
@@ -119,7 +120,11 @@ auza_pj/
 │   ├── main.py            백엔드 시작점
 │   ├── writers/           한/글·PPT 자동 입력
 │   ├── od/                문서 구조 감지 (AI)
+│   │   ├── analyzer.py        OD 오케스트레이터 (병렬 Gemini 호출)
+│   │   ├── vision_client.py   VisionClient 인터페이스 + GeminiDirectClient
+│   │   └── gemini_vision.py   프롬프트 + 코드펜스 처리
 │   ├── parsers/           문서 구조 분석
+│   ├── tests/             자동화 테스트 (81개 unittest)
 │   └── utils/             보조 기능
 ├── doc/               ← 개발 문서
 ├── sample/            ← 샘플 PDF
@@ -130,7 +135,8 @@ auza_pj/
 - **개발용 API 키:** `.env.local` (프로젝트 폴더)
 - **사용자 설정:** `%APPDATA%/AUZA-v2/config.json` (자동 생성)
 - **작업 복원:** `%APPDATA%/AUZA-v2/session.json` (자동 저장)
-- **Python 패키지:** `python/requirements.txt` (앱 시작 시 자동 설치)
+- **Python 패키지:** `python/requirements.txt` (beautifulsoup4, pywin32, Pillow, PyMuPDF, google-genai)
+- **OD 패키지:** `%APPDATA%/AUZA-v2/od-packages/` (torch, torchvision 등 자동 설치)
 
 ---
 
@@ -138,6 +144,9 @@ auza_pj/
 
 | 버전 | 날짜 | 주요 변경 |
 |------|------|-----------|
+| 2.2.1 | 2026-04-13 | Gemini SDK 마이그레이션 (google-genai) + Gemini Vision 병렬화 (체감 ~3배 향상) + 부분 성공 HTML 삽입 |
+| 2.2.0 | 2026-04-10 | electron-updater 자동 업데이트 도입, 릴리즈 노트 모달, embed Python OD 패키지 분리 |
+| 2.1.9 | 2026-04-07 | Python embed 번들 + OD 패키지 자동 설치, 무설치 버전 제거 |
 | 2.1.6 | 2026-04-06 | HWP 2단 글상자 단넘김 + 문단 테두리 재현, 언더라인 번짐 수정, Python 패키지 자동설치, HWP 2014 호환 |
 | 2.1.5 | 2026-04-06 | Python 패키지 자동 체크/설치, python-bridge 경로 탐색 개선 |
 | 2.1.4 | 2026-04-05 | 테이블 탈출 MoveDocEnd 방식, 2단 레이아웃 커서 탈출 확정 |

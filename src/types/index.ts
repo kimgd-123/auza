@@ -46,7 +46,7 @@ export interface ElectronAPI {
   saveApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
 
   // 세션 복구 시 PDF allowlist 등록
-  allowPdf: (filePath: string) => Promise<{ success: boolean; error?: string }>
+  allowPdf: (filePath: string) => Promise<{ success: boolean; error?: string; canonicalPath?: string | null }>
 
   // OD 진행 상황 수신
   onOdProgress: (callback: (progress: OdProgress) => void) => () => void
