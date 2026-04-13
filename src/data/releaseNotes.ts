@@ -16,6 +16,15 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: '2.2.2',
+    date: '2026-04-13',
+    title: '안정성 개선',
+    changes: [
+      { type: 'fix', text: '앱 안정성 및 내부 보안 개선' },
+      { type: 'fix', text: '세션 복구 안정성 향상' },
+    ],
+  },
+  {
     version: '2.2.1',
     date: '2026-04-13',
     title: 'Gemini SDK 마이그레이션 + 병렬화',
