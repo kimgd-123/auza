@@ -59,6 +59,26 @@ if (!gotSingleInstanceLock) {
 app.whenReady().then(() => {
   // Electron 기본 메뉴 제거
   Menu.setApplicationMenu(null)
+
+  // ── CSP (Content-Security-Policy) 설정 ──
+  const { session: electronSession } = require('electron')
+  electronSession.defaultSession.webRequest.onHeadersReceived((details: any, callback: any) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self';" +
+          " script-src 'self';" +
+          " style-src 'self' 'unsafe-inline';" +
+          " img-src 'self' data: blob:;" +
+          " font-src 'self' data:;" +
+          " connect-src 'self' https://generativelanguage.googleapis.com https://*.googleapis.com;" +
+          " worker-src 'self' blob:;",
+        ],
+      },
+    })
+  })
+
   createWindow()
 
   // ── 자동 업데이트 (production만) ──
@@ -110,6 +130,16 @@ app.on('activate', () => {
   }
 })
 
+// ── PDF 경로 검증 공통 헬퍼 ──
+// 모든 PDF 관련 IPC에서 사용. path.resolve() → allowlist 검증.
+// allowPdf에서 realpath로 등록하므로, 여기서도 동일하게 resolve 후 검증.
+function validatePdfPath(pdfPath: string | undefined): string | null {
+  if (!pdfPath) return null
+  const resolved = path.resolve(pdfPath)
+  if (!allowedPdfPaths.has(resolved)) return null
+  return resolved
+}
+
 // IPC: 파일 열기 다이얼로그
 ipcMain.handle('dialog:openFile', async (_event, options: { filters?: Electron.FileFilter[] }) => {
   if (!mainWindow) return null
@@ -150,15 +180,8 @@ ipcMain.handle('file:readPdf', async (_event, filePath: string) => {
   }
 })
 
-// ── 테스트용 내장 API 키 (정식 릴리즈 시 삭제) ──
-// TODO: 정식 릴리즈 전 아래 줄을 삭제하세요
-const TEST_EMBEDDED_API_KEY = '' // 배포용: 사용자가 설정에서 API 키 입력
-
-// Gemini API 키 로딩: 내장키 → .env.local → %APPDATA%/AUZA-v2/config.json
+// Gemini API 키 로딩: .env.local → %APPDATA%/AUZA-v2/config.json
 async function loadGeminiApiKey(): Promise<string | null> {
-  // 0. 테스트용 내장 키 (정식 릴리즈 시 삭제)
-  if (TEST_EMBEDDED_API_KEY) return TEST_EMBEDDED_API_KEY
-
   // 1. .env.local
   try {
     const envPath = path.join(app.getAppPath(), '.env.local')
@@ -366,7 +389,11 @@ ipcMain.handle(
 // IPC: PDF 페이지 이미지 추출 (PyMuPDF)
 ipcMain.handle('pdf:extractImages', async (_event, pdfPath: string, pageNum: number) => {
   try {
-    const result = await sendPythonCommand('extract_pdf_images', { pdfPath, pageNum })
+    const validated = validatePdfPath(pdfPath)
+    if (!validated) {
+      return { images: [], error: '허용되지 않은 PDF 경로입니다.' }
+    }
+    const result = await sendPythonCommand('extract_pdf_images', { pdfPath: validated, pageNum })
     if (!result.success || !result.data) {
       return { images: [], error: result.error }
     }
@@ -387,11 +414,14 @@ ipcMain.handle('capture:analyze', async (_event, imageBase64: string, options?: 
       return { html: null, regions: 0, error: 'Gemini API 키가 설정되지 않았습니다.' }
     }
 
+    // pdfPath allowlist 검증
+    const validatedPdfPath = validatePdfPath(options?.pdfPath) || ''
+
     // OD 분석: 첫 실행 시 패키지 설치(~10분) + 모델 로드 + Gemini 호출 → 15분 타임아웃
     const result = await sendPythonCommand('od_analyze', {
       imageBase64,
       apiKey,
-      pdfPath: options?.pdfPath || '',
+      pdfPath: validatedPdfPath,
       pageNum: options?.pageNum ?? -1,
       captureBboxNorm: options?.captureBboxNorm || null,
     }, 900_000)
@@ -440,11 +470,14 @@ ipcMain.handle('capture:convert', async (_event, payload: {
     if (!apiKey) {
       return { html: null, regions: 0, error: 'Gemini API 키가 설정되지 않았습니다.' }
     }
+    // pdfPath allowlist 검증
+    const validatedPdfPath = validatePdfPath(payload.pdfPath) || ''
+
     const result = await sendPythonCommand('od_convert', {
       imageBase64: payload.imageBase64,
       detections: payload.detections,
       apiKey,
-      pdfPath: payload.pdfPath || '',
+      pdfPath: validatedPdfPath,
       pageNum: payload.pageNum ?? -1,
       captureBboxNorm: payload.captureBboxNorm || null,
     }, 300_000)
@@ -565,17 +598,22 @@ ipcMain.handle(
 )
 
 // IPC: 세션 복구 시 PDF 경로를 allowlist에 등록
+// 보안: 확장자 검증 + 파일 존재 확인 + 정규화된 경로(canonical path) 반환
+// 렌더러 store와 allowlist가 동일한 경로를 참조하도록 canonicalPath를 반환
 ipcMain.handle('session:allowPdf', async (_event, filePath: string) => {
   try {
     const resolved = path.resolve(filePath)
     if (path.extname(resolved).toLowerCase() !== '.pdf') {
-      return { success: false, error: 'PDF 파일이 아닙니다.' }
+      return { success: false, error: 'PDF 파일이 아닙니다.', canonicalPath: null }
     }
-    await fs.access(resolved)
+    const stat = await fs.stat(resolved)
+    if (!stat.isFile()) {
+      return { success: false, error: 'PDF 파일이 아닙니다.', canonicalPath: null }
+    }
     allowedPdfPaths.add(resolved)
-    return { success: true }
+    return { success: true, canonicalPath: resolved }
   } catch (err) {
-    return { success: false, error: (err as Error).message }
+    return { success: false, error: (err as Error).message, canonicalPath: null }
   }
 })
 

@@ -47,6 +47,7 @@ React Renderer (UI) ↔ IPC ↔ Electron Main ↔ child_process (stdin/stdout JS
 18. 재검증도 기본적으로 비동기이며, `scripts/Get-CodexCrossCheckStatus.ps1 -Target "<bundle>" -Mode recheck`로 상태를 확인한다
 19. 최종 완료 선언 전에는 반드시 recheck가 끝났는지 확인하고, 남은 finding이 있으면 모두 해소한다
 20. 자동 호출이 권한 문제로 막히면 사용자에게 승인 요청 후 계속 진행
+21. **빌드 전 릴리즈 노트 필수**: `npm run electron:build` 실행 전에 반드시 `src/data/releaseNotes.ts`에 해당 버전의 릴리즈 노트 항목을 추가해야 한다. version은 `package.json`과 일치해야 하며, 누락 시 사용자가 업데이트 후 릴리즈 노트를 확인할 수 없다
 
 ## 참조
 - **PRD**: `doc/PRD_AUZA_HWP작성기.md`
