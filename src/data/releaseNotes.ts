@@ -16,6 +16,23 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: '2.2.1',
+    date: '2026-04-13',
+    title: 'Gemini SDK 마이그레이션 + 병렬화',
+    highlights: [
+      'Gemini Vision 호출 병렬화로 OD 캡처 체감 속도 ~3배 향상',
+      '단종된 google-generativeai SDK를 신규 google-genai로 교체',
+      '일부 영역 실패 시에도 성공한 영역은 정상 삽입',
+    ],
+    changes: [
+      { type: 'feat', text: 'Gemini Vision 호출 병렬화 — ThreadPoolExecutor 기반, 기본 4워커 동시 처리' },
+      { type: 'feat', text: 'VisionClient 인터페이스 도입 — api_key별 캐싱, 429/503 자동 재시도, timeout 방어' },
+      { type: 'fix', text: '부분 성공 처리 개선 — 일부 영역 실패 시에도 성공한 HTML을 에디터에 삽입' },
+      { type: 'refactor', text: 'Gemini SDK 마이그레이션 — google-generativeai(EOL) → google-genai' },
+      { type: 'chore', text: '시스템 Python 호환성 개선 — embed/시스템 Python 자동 분기' },
+    ],
+  },
+  {
     version: '2.2.0',
     date: '2026-04-10',
     title: '자동 업데이트 도입',
