@@ -26,7 +26,7 @@ def _ensure_packages():
         'bs4': 'beautifulsoup4',
         'win32com': 'pywin32',
         'PIL': 'Pillow',
-        'google.generativeai': 'google-generativeai',
+        'google.genai': 'google-genai',
         'fitz': 'PyMuPDF',
     }
     missing = []
