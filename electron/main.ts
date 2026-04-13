@@ -62,17 +62,22 @@ app.whenReady().then(() => {
 
   // ── CSP (Content-Security-Policy) 설정 ──
   const { session: electronSession } = require('electron')
+  const isDev = !app.isPackaged
   electronSession.defaultSession.webRequest.onHeadersReceived((details: any, callback: any) => {
+    const scriptSrc = isDev ? " script-src 'self' 'unsafe-inline';" : " script-src 'self';"
+    const connectSrc = isDev
+      ? " connect-src 'self' ws://localhost:* http://localhost:* https://generativelanguage.googleapis.com https://*.googleapis.com;"
+      : " connect-src 'self' https://generativelanguage.googleapis.com https://*.googleapis.com;"
     callback({
       responseHeaders: {
         ...details.responseHeaders,
         'Content-Security-Policy': [
           "default-src 'self';" +
-          " script-src 'self';" +
+          scriptSrc +
           " style-src 'self' 'unsafe-inline';" +
           " img-src 'self' data: blob:;" +
           " font-src 'self' data:;" +
-          " connect-src 'self' https://generativelanguage.googleapis.com https://*.googleapis.com;" +
+          connectSrc +
           " worker-src 'self' blob:;",
         ],
       },

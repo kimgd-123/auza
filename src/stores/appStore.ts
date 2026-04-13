@@ -209,9 +209,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
 
   // OD 모드
-  odEnabled: false,
+  odEnabled: true,
   setOdEnabled: (enabled) => set({ odEnabled: enabled }),
-  odReviewEnabled: false,
+  odReviewEnabled: true,
   setOdReviewEnabled: (enabled) => set({ odReviewEnabled: enabled }),
 
   // OD 결과 저장
