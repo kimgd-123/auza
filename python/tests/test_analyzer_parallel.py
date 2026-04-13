@@ -101,25 +101,42 @@ class TestB1_OrderPreservation(unittest.TestCase):
         img_b64 = _make_test_image_b64()
         dets = _make_detections(5)
 
-        # 각 영역마다 고유 HTML 반환
-        def gemini_side_effect(api_key, img, prompt):
-            # 프롬프트에서 영역 식별 불가하므로 호출 순서로 구분
-            return f"<p>region</p>"
+        # 각 영역의 crop_b64를 고유하게 만들어 영역별 고유 응답 반환
+        crop_index = [0]
+        def indexed_crop(img, box):
+            crop_index[0] += 1
+            idx = crop_index[0]
+            from PIL import Image as _Img
+            buf = io.BytesIO()
+            # 각 크롭에 고유 색상 부여 → base64가 달라짐
+            _Img.new("RGB", (10, 10), (idx, idx, idx)).save(buf, format="PNG")
+            return buf.getvalue()
 
-        call_count = [0]
-        def ordered_gemini(api_key, img, prompt):
-            call_count[0] += 1
-            return f"<p>r{call_count[0]}</p>"
+        # crop_b64 기반으로 고유 마커 반환 (영역 인덱스와 1:1 매칭)
+        seen_crops = {}
+        seen_counter = [0]
+        def unique_gemini(api_key, img_b64_arg, prompt):
+            if img_b64_arg not in seen_crops:
+                seen_counter[0] += 1
+                seen_crops[img_b64_arg] = seen_counter[0]
+            idx = seen_crops[img_b64_arg]
+            time.sleep(0.05 * (5 - idx))  # 역순 완료로 병렬 순서 뒤섞기
+            return f"<p>r{idx}</p>"
 
-        with patch('od.analyzer.call_gemini_vision', side_effect=ordered_gemini):
-            with patch.dict(os.environ, {"AUZA_GEMINI_PARALLEL": "4"}):
+        mock_crop.side_effect = indexed_crop
+
+        with patch('od.analyzer.call_gemini_vision', side_effect=unique_gemini):
+            with patch.dict(os.environ, {"AUZA_GEMINI_PARALLEL": "5"}, clear=False):
                 result = convert_regions(img_b64, dets, "test-key")
 
         self.assertIsNone(result["error"])
         self.assertEqual(result["regions"], 5)
-        # 결과 HTML이 5개 파트를 포함하는지 확인
         parts = [p for p in result["html"].split("\n") if p.strip()]
         self.assertEqual(len(parts), 5)
+        # 핵심: 결과 HTML이 인덱스 순서대로 정렬되어야 함
+        self.assertEqual(parts, [
+            "<p>r1</p>", "<p>r2</p>", "<p>r3</p>", "<p>r4</p>", "<p>r5</p>"
+        ])
 
 
 # ═══════════════════════════════════════════════
@@ -335,28 +352,42 @@ class TestB7_NoDetectionsFallback(unittest.TestCase):
 # ═══════════════════════════════════════════════
 
 class TestB8_PyMuPDFMainThread(unittest.TestCase):
-    """_get_figure_image (PyMuPDF) 호출이 메인 스레드에서 실행됨"""
+    """_get_figure_image (PyMuPDF) 호출이 메인 스레드에서 실행됨 — 병렬 경로 포함"""
 
     @_patch_sort()
     @_patch_crop()
     def test_figure_processing_on_main_thread(self, mock_crop, mock_sort):
+        """text + figure 혼합 (2+ Gemini task) → 병렬 경로에서도 figure 후처리는 메인 스레드"""
         img_b64 = _make_test_image_b64()
-        dets = [{"region": "figure", "label": "figure", "score": 0.9,
-                 "box_px": [10, 10, 190, 190]}]
+        # text 2개 + figure 1개 → Gemini task 3개 (text 2 + figure_check 1) → 병렬 분기
+        dets = [
+            {"region": "text", "label": "text", "score": 0.9, "box_px": [10, 0, 190, 60]},
+            {"region": "figure", "label": "figure", "score": 0.9, "box_px": [10, 60, 190, 140]},
+            {"region": "text", "label": "text", "score": 0.9, "box_px": [10, 140, 190, 200]},
+        ]
 
         figure_thread_names = []
+        gemini_thread_names = []
 
         def track_thread_figure(*args, **kwargs):
             figure_thread_names.append(threading.current_thread().name)
             return "abc123"
 
-        with patch('od.analyzer.call_gemini_vision', return_value="[FIGURE]"):
+        def track_thread_gemini(api_key, img, prompt):
+            gemini_thread_names.append(threading.current_thread().name)
+            return "[FIGURE]"
+
+        with patch('od.analyzer.call_gemini_vision', side_effect=track_thread_gemini):
             with patch('od.analyzer._get_figure_image', side_effect=track_thread_figure):
                 with patch.dict(os.environ, {"AUZA_GEMINI_PARALLEL": "4"}, clear=False):
                     convert_regions(img_b64, dets, "test-key", trust_labels=False)
 
-        # _get_figure_image는 메인 스레드에서 호출되어야 함
-        self.assertTrue(len(figure_thread_names) > 0)
+        # Gemini 호출이 3건 이상 (text 2 + figure_check 1) → 병렬 경로 탔음을 간접 확인
+        self.assertGreaterEqual(len(gemini_thread_names), 3)
+
+        # _get_figure_image는 반드시 메인 스레드에서 호출
+        self.assertTrue(len(figure_thread_names) > 0,
+                        "_get_figure_image가 호출되지 않음")
         for name in figure_thread_names:
             self.assertEqual(name, threading.main_thread().name,
                              f"PyMuPDF가 워커 스레드에서 호출됨: {name}")

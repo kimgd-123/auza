@@ -55,10 +55,14 @@ export default function OdReReviewModal() {
         captureBboxNorm: savedOdData.captureBboxNorm,
       })
 
-      if (result.error || !result.html) {
+      if (!result.html) {
         setError(result.error || '인식 결과가 비어 있습니다.')
         setConverting(false)
         return
+      }
+      // 부분 성공: html이 있으면 삽입 진행, error는 비차단 경고
+      if (result.error) {
+        console.warn('[OdReReviewModal] 부분 실패 경고:', result.error)
       }
 
       let html = stripCodeFences(result.html)
