@@ -118,29 +118,11 @@ PROMPT_FORMULA = f"""이 영역의 수식을 LaTeX 형식으로 변환해주세�
 {_NO_HALLUCINATION}"""
 
 
-def call_gemini_vision(api_key: str, image_base64: str, prompt: str) -> str:
-    """Gemini Vision API 호출
+def _strip_code_fences(text: str) -> str:
+    """Gemini 응답에서 코드 펜스 및 HTML 래퍼 제거"""
+    import re
 
-    Args:
-        api_key: Gemini API 키
-        image_base64: base64 인코딩된 PNG 이미지
-        prompt: 분석 프롬프트
-
-    Returns:
-        Gemini 응답 텍스트 (HTML)
-    """
-    import google.generativeai as genai
-
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-3.1-pro-preview")
-
-    # google-generativeai SDK: inline_data 형식으로 base64 이미지 전달
-    response = model.generate_content([
-        {"inline_data": {"mime_type": "image/png", "data": image_base64}},
-        prompt,
-    ])
-
-    text = response.text.strip()
+    text = text.strip()
 
     # 코드 펜스 제거
     if text.startswith("```html"):
@@ -152,10 +134,38 @@ def call_gemini_vision(api_key: str, image_base64: str, prompt: str) -> str:
     text = text.strip()
 
     # <html>/<body> 래퍼 제거
-    import re
     text = re.sub(r'</?(!doctype[^>]*|html|head|body)[^>]*>', '', text, flags=re.IGNORECASE)
 
     return text.strip()
+
+
+# ── VisionClient 싱글턴 (api_key별 캐싱은 GeminiDirectClient 내부에서 처리) ──
+_vision_clients: dict = {}  # {api_key: GeminiDirectClient}
+
+
+def _get_vision_client(api_key: str):
+    """api_key별 GeminiDirectClient 싱글턴 반환"""
+    from .vision_client import GeminiDirectClient
+
+    if api_key not in _vision_clients:
+        _vision_clients[api_key] = GeminiDirectClient(api_key)
+    return _vision_clients[api_key]
+
+
+def call_gemini_vision(api_key: str, image_base64: str, prompt: str) -> str:
+    """Gemini Vision API 호출
+
+    Args:
+        api_key: Gemini API 키
+        image_base64: base64 인코딩된 PNG 이미지
+        prompt: 분석 프롬프트
+
+    Returns:
+        Gemini 응답 텍스트 (HTML)
+    """
+    client = _get_vision_client(api_key)
+    result = client.call_vision(image_base64, prompt)
+    return _strip_code_fences(result.text)
 
 
 def get_prompt_for_region(region: str) -> str:

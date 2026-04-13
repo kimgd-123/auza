@@ -252,11 +252,14 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
     setCaptureLoading(false)
     setOdProgress(null)
 
-    if (error || !html) {
+    if (!html) {
       setCaptureError(error || '인식 결과가 비어 있습니다. 더 크게 확대해서 다시 캡처해주세요.')
       return
     }
-    if (!html) return
+    // 부분 성공: html이 있으면 삽입 진행, error는 비차단 경고로 표시
+    if (error) {
+      console.warn('[AreaCapture] 부분 실패 경고:', error)
+    }
 
     // Asset Store에 캡처 스크린샷 등록
     const { currentPage } = useAppStore.getState()
@@ -532,11 +535,15 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
     setCaptureLoading(false)
     setOdProgress(null)
 
-    if (result.error || !result.html) {
+    if (!result.html) {
       setCaptureError(result.error || '인식 결과가 비어 있습니다.')
       // 재시도 시 편집된 detections 보존
       setPendingReview({ ...review, detections: editedDetections })
       return
+    }
+    // 부분 성공: html이 있으면 삽입 진행, error는 비차단 경고
+    if (result.error) {
+      console.warn('[AreaCapture] 부분 실패 경고:', result.error)
     }
 
     let html = stripCodeFences(result.html)

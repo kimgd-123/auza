@@ -2,13 +2,21 @@
 
 캡처 이미지 → OD 감지 → 영역별 크롭 → Gemini Vision 호출 → 통합 HTML 반환
 figure 영역은 PDF 원본 이미지를 우선 사용 (PyMuPDF)
+
+Phase B: Gemini 호출 부분 병렬화 (ThreadPoolExecutor)
+- figure/PyMuPDF 후처리는 메인 스레드 순차 유지
+- AUZA_GEMINI_PARALLEL_DISABLE=1 → 순차 fallback
+- AUZA_GEMINI_PARALLEL=N (1~10) → 워커 수 조절 (기본 4)
 """
 
+import os
 import sys
 import io
 import re
 import json
 import base64
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from .constants import MIN_OD_SIZE
 from .detector import detect_regions_from_image, crop_region_from_image, sort_regions_reading_order, reclassify_boxed_text
 from .gemini_vision import call_gemini_vision, get_prompt_for_region, PROMPT_FIGURE_CHECK
@@ -88,11 +96,33 @@ def detect_only(image_base64: str, od_model, emit_done: bool = True) -> dict:
     }
 
 
+def _get_parallel_workers() -> int:
+    """병렬화 워커 수 반환. 0이면 순차 실행.
+
+    환경변수:
+        AUZA_GEMINI_PARALLEL_DISABLE=1 → 0 (순차)
+        AUZA_GEMINI_PARALLEL=N (1~10) → N (기본 4)
+    """
+    if os.environ.get("AUZA_GEMINI_PARALLEL_DISABLE", "").strip() == "1":
+        return 0
+    raw = os.environ.get("AUZA_GEMINI_PARALLEL", "4").strip()
+    try:
+        n = int(raw)
+        if n < 1 or n > 10:
+            return 4
+        return n
+    except (ValueError, TypeError):
+        return 4
+
+
 def convert_regions(image_base64: str, detections: list, api_key: str,
                     pdf_path: str = None, page_num: int = -1,
                     capture_bbox_norm: list = None,
                     trust_labels: bool = False) -> dict:
     """사용자가 편집한 detections를 기반으로 Gemini Vision 변환 + figure 후처리
+
+    Phase B: Gemini 호출을 ThreadPoolExecutor로 병렬 실행.
+    figure/PyMuPDF 후처리는 메인 스레드에서 순차 처리.
 
     Args:
         image_base64: base64 인코딩된 PNG 이미지
@@ -128,57 +158,148 @@ def convert_regions(image_base64: str, detections: list, api_key: str,
         html = call_gemini_vision(api_key, image_base64, PROMPT_TEXT)
         return {"html": html, "regions": 0, "error": None}
 
-    sys.stderr.write(f"[od-analyzer] convert: {len(detections)} 영역 변환 시작\n")
-
-    html_parts = []
-    errors = []
     total = len(detections)
+    workers = _get_parallel_workers()
+    use_parallel = workers > 0 and total > 1
+
+    sys.stderr.write(f"[od-analyzer] convert: {total} 영역 변환 시작 "
+                     f"(parallel={use_parallel}, workers={workers})\n")
+
+    # ────────────────────────────────────────────
+    # Phase 1: 준비 — 크롭 + 태스크 분류 (메인 스레드)
+    # ────────────────────────────────────────────
+    tasks = []  # [{index, det, type, crop_b64?, prompt?}]
 
     for i, det in enumerate(detections):
         region = det["region"]
         box = det["box_px"]
-        score = det.get("score", 0)
 
-        _emit_progress("region", current=i + 1, total=total,
-                       detail=f"{region} 영역 인식 중")
-        sys.stderr.write(f"[od-analyzer] 영역 {i+1}/{total}: "
-                         f"{region} (score={score}) box={box}\n")
+        if region == "figure" and trust_labels:
+            # Gemini 불필요 — 이미지 직접 삽입
+            tasks.append({"index": i, "det": det, "type": "figure_direct"})
+        elif region == "figure":
+            # Gemini figure check 필요
+            crop_bytes = crop_region_from_image(img, box)
+            crop_b64 = base64.b64encode(crop_bytes).decode("ascii")
+            tasks.append({
+                "index": i, "det": det, "type": "figure_check",
+                "crop_b64": crop_b64, "prompt": PROMPT_FIGURE_CHECK,
+            })
+        else:
+            # Gemini 내용 추출
+            crop_bytes = crop_region_from_image(img, box)
+            crop_b64 = base64.b64encode(crop_bytes).decode("ascii")
+            prompt = get_prompt_for_region(region)
+            tasks.append({
+                "index": i, "det": det, "type": "gemini",
+                "crop_b64": crop_b64, "prompt": prompt,
+            })
 
-        if region == "figure":
-            # trust_labels=True (사용자 리뷰 경로): 사용자가 figure로 지정 → Gemini 재판별 없이 이미지 삽입
-            if trust_labels:
-                sys.stderr.write(f"[od-analyzer] 영역 {i+1}: trust_labels=True, "
-                                 f"figure → 이미지 직접 삽입 (Gemini 호출 없음)\n")
+    # ────────────────────────────────────────────
+    # Phase 2: Gemini 호출 (병렬 또는 순차)
+    # ────────────────────────────────────────────
+    gemini_tasks = [t for t in tasks if t["type"] in ("figure_check", "gemini")]
+
+    # 진행률 카운터 (atomic, 단조 증가)
+    progress_lock = threading.Lock()
+    progress_counter = [0]  # mutable for closure
+
+    def _tick_progress(region_name: str):
+        with progress_lock:
+            progress_counter[0] += 1
+            current = progress_counter[0]
+        _emit_progress("region", current=current, total=total,
+                       detail=f"{region_name} 영역 인식 완료")
+
+    if use_parallel and len(gemini_tasks) > 1:
+        # ── 병렬 실행 ──
+        sys.stderr.write(f"[od-analyzer] 병렬 Gemini 호출: {len(gemini_tasks)}건, "
+                         f"workers={workers}\n")
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_task = {}
+            for task in gemini_tasks:
+                future = executor.submit(
+                    call_gemini_vision, api_key, task["crop_b64"], task["prompt"]
+                )
+                future_to_task[future] = task
+
+            for future in as_completed(future_to_task):
+                task = future_to_task[future]
+                region = task["det"]["region"]
+                idx = task["index"]
                 try:
-                    img_b64 = _get_figure_image(
-                        img, box, pdf_path, page_num, capture_bbox_norm, img_w, img_h
-                    )
-                    html_parts.append(
-                        f'<img src="data:image/png;base64,{img_b64}" '
+                    task["gemini_result"] = future.result()
+                    sys.stderr.write(f"[od-analyzer] 영역 {idx+1}/{total}: "
+                                     f"{region} Gemini 완료\n")
+                except Exception as e:
+                    task["gemini_error"] = e
+                    sys.stderr.write(f"[od-analyzer] 영역 {idx+1}/{total}: "
+                                     f"{region} Gemini 실패: {e}\n")
+                _tick_progress(region)
+    else:
+        # ── 순차 실행 ──
+        for task in gemini_tasks:
+            region = task["det"]["region"]
+            idx = task["index"]
+            sys.stderr.write(f"[od-analyzer] 영역 {idx+1}/{total}: "
+                             f"{region} Gemini 호출 중\n")
+            try:
+                task["gemini_result"] = call_gemini_vision(
+                    api_key, task["crop_b64"], task["prompt"]
+                )
+            except Exception as e:
+                task["gemini_error"] = e
+                sys.stderr.write(f"[od-analyzer] 영역 {idx+1}/{total}: "
+                                 f"{region} Gemini 실패: {e}\n")
+            _tick_progress(region)
+
+    # figure_direct 태스크도 진행률에 반영
+    for task in tasks:
+        if task["type"] == "figure_direct":
+            _tick_progress("figure")
+
+    # ────────────────────────────────────────────
+    # Phase 3: 후처리 — figure 이미지/마커 교체 (메인 스레드, 순차)
+    # ────────────────────────────────────────────
+    html_parts = [None] * total
+    errors = []
+
+    for task in tasks:
+        i = task["index"]
+        det = task["det"]
+        region = det["region"]
+        box = det["box_px"]
+
+        if task["type"] == "figure_direct":
+            # trust_labels=True: 이미지 직접 삽입 (Gemini 없음)
+            sys.stderr.write(f"[od-analyzer] 영역 {i+1}: trust_labels=True, "
+                             f"figure → 이미지 직접 삽입\n")
+            try:
+                img_b64 = _get_figure_image(
+                    img, box, pdf_path, page_num, capture_bbox_norm, img_w, img_h
+                )
+                html_parts[i] = (
+                    f'<img src="data:image/png;base64,{img_b64}" '
+                    f'alt="캡처 이미지" style="max-width: 100%;" />'
+                )
+            except Exception as e:
+                sys.stderr.write(f"[od-analyzer] 영역 {i+1}: figure 이미지 생성 실패: {e}\n")
+                try:
+                    crop_bytes = crop_region_from_image(img, box)
+                    fb64 = base64.b64encode(crop_bytes).decode("ascii")
+                    html_parts[i] = (
+                        f'<img src="data:image/png;base64,{fb64}" '
                         f'alt="캡처 이미지" style="max-width: 100%;" />'
                     )
-                except Exception as e:
-                    sys.stderr.write(f"[od-analyzer] 영역 {i+1}: figure 이미지 생성 실패: {e}\n")
-                    # fallback: 크롭 이미지라도 삽입
-                    try:
-                        crop_bytes = crop_region_from_image(img, box)
-                        fb64 = base64.b64encode(crop_bytes).decode("ascii")
-                        html_parts.append(
-                            f'<img src="data:image/png;base64,{fb64}" '
-                            f'alt="캡처 이미지" style="max-width: 100%;" />'
-                        )
-                    except Exception as e2:
-                        errors.append(f"영역 {i+1} figure 이미지 실패: {e2}")
-                continue
+                except Exception as e2:
+                    errors.append(f"영역 {i+1} figure 이미지 실패: {e2}")
 
-            # trust_labels=False (자동 경로): Gemini에게 진짜 figure인지 재판별
-            gemini_html = None
-            try:
-                crop_bytes = crop_region_from_image(img, box)
-                crop_b64 = base64.b64encode(crop_bytes).decode("ascii")
-                gemini_html = call_gemini_vision(api_key, crop_b64, PROMPT_FIGURE_CHECK)
-            except Exception as e:
-                sys.stderr.write(f"[od-analyzer] figure 판별 실패: {e}\n")
+        elif task["type"] == "figure_check":
+            gemini_html = task.get("gemini_result")
+            gemini_err = task.get("gemini_error")
+
+            if gemini_err:
+                sys.stderr.write(f"[od-analyzer] figure 판별 실패: {gemini_err}\n")
 
             is_real_figure = (not gemini_html or
                               gemini_html.strip().upper() == "[FIGURE]")
@@ -188,63 +309,53 @@ def convert_regions(image_base64: str, detections: list, api_key: str,
                 img_b64 = _get_figure_image(
                     img, box, pdf_path, page_num, capture_bbox_norm, img_w, img_h
                 )
-                html_parts.append(
+                html_parts[i] = (
                     f'<img src="data:image/png;base64,{img_b64}" '
                     f'alt="캡처 이미지" style="max-width: 100%;" />'
                 )
             else:
                 sys.stderr.write(f"[od-analyzer] 영역 {i+1}: figure→text 재분류 성공\n")
-                html_parts.append(_replace_figure_markers(
+                html_parts[i] = _replace_figure_markers(
                     gemini_html, img, box, pdf_path, page_num,
                     capture_bbox_norm, img_w, img_h
-                ))
-        elif region == "boxed_text":
-            # 글상자: Gemini로 내용 추출 후 border div로 래핑
-            try:
-                crop_bytes = crop_region_from_image(img, box)
-                crop_b64 = base64.b64encode(crop_bytes).decode("ascii")
-                prompt = get_prompt_for_region(region)
-                result_html = call_gemini_vision(api_key, crop_b64, prompt)
-                if result_html:
-                    result_html = _replace_figure_markers(
-                        result_html, img, box, pdf_path, page_num,
-                        capture_bbox_norm, img_w, img_h
-                    )
-                    result_html = (
-                        '<table style="border: 1px solid #000; width: 100%; border-collapse: collapse;">'
-                        '<tr><td style="padding: 8px;">'
-                        + result_html
-                        + '</td></tr></table>'
-                    )
-                    html_parts.append(result_html)
-            except Exception as e:
-                err_msg = f"영역 {i+1} ({region}) 처리 실패: {e}"
+                )
+
+        else:  # type == "gemini"
+            gemini_err = task.get("gemini_error")
+            if gemini_err:
+                err_msg = f"영역 {i+1} ({region}) 처리 실패: {gemini_err}"
                 sys.stderr.write(f"[od-analyzer] {err_msg}\n")
                 errors.append(err_msg)
-        else:
-            try:
-                crop_bytes = crop_region_from_image(img, box)
-                crop_b64 = base64.b64encode(crop_bytes).decode("ascii")
-                prompt = get_prompt_for_region(region)
-                result_html = call_gemini_vision(api_key, crop_b64, prompt)
-                if result_html:
-                    result_html = _replace_figure_markers(
-                        result_html, img, box, pdf_path, page_num,
-                        capture_bbox_norm, img_w, img_h
-                    )
-                    html_parts.append(result_html)
-            except Exception as e:
-                err_msg = f"영역 {i+1} ({region}) 처리 실패: {e}"
-                sys.stderr.write(f"[od-analyzer] {err_msg}\n")
-                errors.append(err_msg)
+                continue
+
+            result_html = task.get("gemini_result")
+            if not result_html:
+                continue
+
+            # figure 마커 교체 (메인 스레드 — PyMuPDF 사용)
+            result_html = _replace_figure_markers(
+                result_html, img, box, pdf_path, page_num,
+                capture_bbox_norm, img_w, img_h
+            )
+
+            # boxed_text 래핑
+            if region == "boxed_text":
+                result_html = (
+                    '<table style="border: 1px solid #000; width: 100%; border-collapse: collapse;">'
+                    '<tr><td style="padding: 8px;">'
+                    + result_html
+                    + '</td></tr></table>'
+                )
+
+            html_parts[i] = result_html
 
     _emit_progress("done", current=total, total=total, detail="완료")
 
-    combined_html = "\n".join(html_parts)
+    combined_html = "\n".join(p for p in html_parts if p)
 
     return {
         "html": combined_html,
-        "regions": len(detections),
+        "regions": total,
         "error": "; ".join(errors) if errors else None,
     }
 

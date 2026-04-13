@@ -42,6 +42,17 @@ class TestEmbedImports(unittest.TestCase):
         from od.pdf_image_extractor import extract_page_images
         self.assertTrue(callable(extract_page_images))
 
+    def test_google_genai_import(self):
+        """google-genai SDK import 성공 확인"""
+        from google import genai
+        self.assertTrue(hasattr(genai, 'Client'))
+
+    def test_google_genai_types_import(self):
+        """google.genai.types import 성공 확인"""
+        from google.genai import types
+        self.assertTrue(hasattr(types, 'Part'))
+        self.assertTrue(hasattr(types, 'HttpOptions'))
+
     def test_ensure_packages_includes_fitz(self):
         """_ensure_packages() 목록에 fitz가 포함되어 있는지 확인"""
         import main
@@ -49,6 +60,14 @@ class TestEmbedImports(unittest.TestCase):
         source = inspect.getsource(main._ensure_packages)
         self.assertIn('fitz', source)
         self.assertIn('PyMuPDF', source)
+
+    def test_ensure_packages_includes_google_genai(self):
+        """_ensure_packages() 목록에 google.genai가 포함되어 있는지 확인"""
+        import main
+        import inspect
+        source = inspect.getsource(main._ensure_packages)
+        self.assertIn('google.genai', source)
+        self.assertIn('google-genai', source)
 
 
 if __name__ == '__main__':

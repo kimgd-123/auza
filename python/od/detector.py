@@ -19,7 +19,11 @@ def _get_od_packages_dir() -> str:
 
 
 def _ensure_od_site_path():
-    """OD 패키지 경로를 sys.path 최우선에 추가 (import 가능하도록)"""
+    """OD 패키지 경로를 sys.path 최우선에 추가 (import 가능하도록)
+    시스템 Python에서는 추가하지 않음 — od-packages는 embed Python 버전(cp312)용이라
+    시스템 Python(cp311 등)에서 로드하면 바이너리 호환 오류 발생"""
+    if not _is_embed_python():
+        return
     od_dir = _get_od_packages_dir()
     if od_dir not in sys.path:
         sys.path.insert(0, od_dir)
@@ -105,20 +109,23 @@ def _cleanup_legacy_site_packages():
 
 
 def _ensure_od_packages():
-    """OD 기능에 필요한 패키지 누락 시 %APPDATA%/AUZA-v2/od-packages/에 자동 설치"""
+    """OD 기능에 필요한 패키지 누락 시 자동 설치
+    - embed Python: %APPDATA%/AUZA-v2/od-packages/에 --target 설치
+    - 시스템 Python: 일반 pip install (시스템 site-packages 사용)"""
+    embed = _is_embed_python()
     od_dir = _get_od_packages_dir()
     _ensure_od_site_path()
 
-    # 0. legacy site-packages 정리 (업그레이드 시 1회)
+    # 0. legacy site-packages 정리 (embed Python 업그레이드 시 1회)
     _cleanup_legacy_site_packages()
 
-    # 1. torch 확인 — od-packages 경로에서 로드되는지까지 검증
+    # 1. torch 확인
     torch_ok = False
     try:
         import torch
         if torch.version.cuda is not None:
             sys.stderr.write("[od] CUDA torch detected, replacing with CPU\n")
-        elif not _is_in_od_dir('torch'):
+        elif embed and not _is_in_od_dir('torch'):
             sys.stderr.write(f"[od] torch가 od-packages 밖에서 로드됨: {getattr(torch, '__file__', '?')}, 재설치\n")
         else:
             torch_ok = True
@@ -134,20 +141,24 @@ def _ensure_od_packages():
              'torch', 'torchvision', 'torchaudio'],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        # od-packages 내 잔재도 정리
-        import shutil
-        for name in os.listdir(od_dir):
-            if name.lower().startswith(('torch', 'torchvision', 'torchaudio')):
-                full = os.path.join(od_dir, name)
-                shutil.rmtree(full, ignore_errors=True) if os.path.isdir(full) else os.remove(full)
+        if embed:
+            # od-packages 내 잔재도 정리
+            import shutil
+            for name in os.listdir(od_dir):
+                if name.lower().startswith(('torch', 'torchvision', 'torchaudio')):
+                    full = os.path.join(od_dir, name)
+                    shutil.rmtree(full, ignore_errors=True) if os.path.isdir(full) else os.remove(full)
 
-        subprocess.check_call(
-            [sys.executable, '-m', 'pip', 'install', '--quiet',
-             '--force-reinstall', '--target', od_dir,
-             'torch', 'torchvision',
-             '--index-url', 'https://download.pytorch.org/whl/cpu'],
-            stdout=subprocess.DEVNULL,
-        )
+        install_cmd = [
+            sys.executable, '-m', 'pip', 'install', '--quiet',
+            '--force-reinstall',
+            'torch', 'torchvision',
+            '--index-url', 'https://download.pytorch.org/whl/cpu',
+        ]
+        if embed:
+            install_cmd[5:5] = ['--target', od_dir]
+
+        subprocess.check_call(install_cmd, stdout=subprocess.DEVNULL)
         # smoke test
         try:
             import importlib
@@ -171,7 +182,7 @@ def _ensure_od_packages():
     for mod, pkg in required.items():
         try:
             __import__(mod)
-            if not _is_in_od_dir(mod):
+            if embed and not _is_in_od_dir(mod):
                 sys.stderr.write(f"[od] {mod}가 od-packages 밖에서 로드됨, 재설치\n")
                 missing.append(pkg)
         except ImportError:
@@ -179,11 +190,12 @@ def _ensure_od_packages():
 
     if missing:
         _od_progress('setup', f'OD 패키지 설치 중: {", ".join(missing)}')
-        subprocess.check_call(
-            [sys.executable, '-m', 'pip', 'install', '--quiet',
-             '--target', od_dir, *missing],
-            stdout=subprocess.DEVNULL,
-        )
+        install_cmd = [
+            sys.executable, '-m', 'pip', 'install', '--quiet', *missing,
+        ]
+        if embed:
+            install_cmd[5:5] = ['--target', od_dir]
+        subprocess.check_call(install_cmd, stdout=subprocess.DEVNULL)
         import importlib
         importlib.invalidate_caches()
         _od_progress('setup', 'OD 패키지 설치 완료')
