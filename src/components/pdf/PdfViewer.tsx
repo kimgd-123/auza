@@ -4,15 +4,18 @@ import 'react-pdf/dist/Page/AnnotationLayer.css'
 import 'react-pdf/dist/Page/TextLayer.css'
 import { useAppStore } from '@/stores/appStore'
 import AreaCapture from './AreaCapture'
+import BatchCaptureQueue from './BatchCaptureQueue'
+import BatchReviewModal from './BatchReviewModal'
 
 // pdf.js worker — node_modules에서 직접 import (개발/패키징 모두 호환)
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker
 
 export default function PdfViewer() {
-  const { pdfPath, currentPage, totalPages, setCurrentPage, setTotalPages, captureLoading, captureError, setCaptureError } = useAppStore()
+  const { pdfPath, currentPage, totalPages, setCurrentPage, setTotalPages, captureLoading, captureError, setCaptureError, batchMode, setBatchMode, batchCaptureState } = useAppStore()
   const [scale, setScale] = useState(1.0)
   const [tool, setTool] = useState<'select' | 'capture'>('select')
+  const [showCaptureDropdown, setShowCaptureDropdown] = useState(false)
   const [pdfData, setPdfData] = useState<Uint8Array | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [pageInputValue, setPageInputValue] = useState('')
@@ -155,15 +158,41 @@ export default function PdfViewer() {
         >
           선택
         </button>
-        <button
-          data-tutorial="capture-tab"
-          onClick={() => setTool('capture')}
-          className={`px-2 py-1 rounded text-xs font-medium ${
-            tool === 'capture' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-          }`}
-        >
-          캡처
-        </button>
+        <div className="relative">
+          <button
+            data-tutorial="capture-tab"
+            onClick={() => {
+              if (tool === 'capture') {
+                setShowCaptureDropdown(!showCaptureDropdown)
+              } else {
+                setTool('capture')
+                setShowCaptureDropdown(false)
+              }
+            }}
+            className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 ${
+              tool === 'capture' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            캡처{tool === 'capture' && (batchMode ? ' (일괄)' : ' (개별)')}
+            <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" /></svg>
+          </button>
+          {tool === 'capture' && showCaptureDropdown && (
+            <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-50 py-1 min-w-[100px]">
+              <button
+                onClick={() => { setBatchMode(false); setShowCaptureDropdown(false) }}
+                className={`w-full text-left px-3 py-1 text-xs hover:bg-gray-100 ${!batchMode ? 'font-bold text-orange-700' : ''}`}
+              >
+                개별 캡처
+              </button>
+              <button
+                onClick={() => { setBatchMode(true); setShowCaptureDropdown(false) }}
+                className={`w-full text-left px-3 py-1 text-xs hover:bg-gray-100 ${batchMode ? 'font-bold text-orange-700' : ''}`}
+              >
+                일괄 캡처
+              </button>
+            </div>
+          )}
+        </div>
 
         <div className="w-px h-4 bg-gray-300 mx-1" />
 
@@ -248,10 +277,13 @@ export default function PdfViewer() {
         </div>
       )}
 
+      {/* 일괄 캡처 큐 패널 — 도구바 아래, PDF 위 */}
+      <BatchCaptureQueue />
+
       {/* PDF 렌더링 */}
       <div
         ref={containerRef}
-        className={`flex-1 overflow-auto flex justify-center bg-gray-100 p-4 ${
+        className={`h-full overflow-auto flex justify-center bg-gray-100 p-4 ${
           tool === 'capture' ? 'cursor-crosshair' : ''
         }`}
       >
@@ -294,6 +326,8 @@ export default function PdfViewer() {
           </Document>
         )}
       </div>
+      {/* 일괄 캡처 리뷰 모달 */}
+      {batchCaptureState?.status === 'reviewing' && <BatchReviewModal />}
     </div>
   )
 }

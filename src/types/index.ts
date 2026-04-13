@@ -176,6 +176,27 @@ export interface Asset {
   sourcePage?: number           // PDF 페이지 번호
 }
 
+// 일괄 캡처 (Batch Capture)
+export interface BatchCaptureSegment {
+  id: string                    // "batch_{timestamp}_{order}"
+  pageNum: number               // 0-based
+  bboxNorm: number[]            // [x0, y0, x1, y1] normalized
+  pdfPath: string | null
+  captureBase64?: string
+  imageWidth?: number
+  imageHeight?: number
+  detections?: OdDetection[]
+  convertedHtml?: string
+  status: 'pending' | 'capturing' | 'detecting' | 'detected' | 'reviewed' | 'converting' | 'converted' | 'error'
+  error?: string
+}
+
+export interface BatchCaptureState {
+  active: boolean
+  status: 'capturing' | 'reviewing' | 'converting' | 'done' | 'cancelled'
+  segments: BatchCaptureSegment[]
+}
+
 // 앱 상태
 export interface PanelSizes {
   pdf: number

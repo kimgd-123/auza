@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@/stores/appStore'
 import { useAssetStore } from '@/stores/assetStore'
+import { useBatchCapture } from '@/hooks/useBatchCapture'
 import type { OdProgress, OdDetection, PendingOdReview } from '@/types'
 import OdReviewOverlay from './OdReviewOverlay'
 
@@ -92,7 +93,8 @@ function stripCodeFences(text: string): string {
 }
 
 export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
-  const { captureLoading, setCaptureLoading, setCaptureError, odEnabled, setOdEnabled, odReviewEnabled, setOdReviewEnabled } = useAppStore()
+  const { captureLoading, setCaptureLoading, setCaptureError, odEnabled, setOdEnabled, odReviewEnabled, setOdReviewEnabled, batchMode, batchCaptureState } = useAppStore()
+  const { addCapture, startBatchMode } = useBatchCapture()
   const overlayRef = useRef<HTMLDivElement>(null)
   const [dragRect, setDragRect] = useState<DragRect | null>(null)
   const isDraggingRef = useRef(false)
@@ -145,6 +147,11 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
         isDraggingRef.current = false
         setDragRect(null)
       }
+      // auto-scroll 정리
+      if (autoScrollRef.current) {
+        cancelAnimationFrame(autoScrollRef.current)
+        autoScrollRef.current = null
+      }
     }
     window.addEventListener('mouseup', handleGlobalMouseUp)
     return () => window.removeEventListener('mouseup', handleGlobalMouseUp)
@@ -160,6 +167,8 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
     isDraggingRef.current = true
   }, [captureLoading])
 
+  const autoScrollRef = useRef<number | null>(null)
+
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!overlayRef.current) return
     const rect = overlayRef.current.getBoundingClientRect()
@@ -171,6 +180,35 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
 
     if (isDraggingRef.current) {
       setDragRect((prev) => prev ? { ...prev, endX: x, endY: y } : null)
+
+      // 드래그 중 가장자리 auto-scroll
+      const scrollContainer = overlayRef.current?.closest('.overflow-auto') as HTMLElement | null
+      if (scrollContainer) {
+        const containerRect = scrollContainer.getBoundingClientRect()
+        const edgeZone = 40 // 가장자리 40px 이내에서 스크롤 시작
+        const scrollSpeed = 8
+
+        if (autoScrollRef.current) cancelAnimationFrame(autoScrollRef.current)
+
+        const doAutoScroll = () => {
+          if (!isDraggingRef.current) return
+          let scrolled = false
+          if (e.clientY > containerRect.bottom - edgeZone) {
+            scrollContainer.scrollTop += scrollSpeed
+            scrolled = true
+          } else if (e.clientY < containerRect.top + edgeZone) {
+            scrollContainer.scrollTop -= scrollSpeed
+            scrolled = true
+          }
+          if (scrolled) {
+            autoScrollRef.current = requestAnimationFrame(doAutoScroll)
+          }
+        }
+
+        if (e.clientY > containerRect.bottom - edgeZone || e.clientY < containerRect.top + edgeZone) {
+          doAutoScroll()
+        }
+      }
     }
   }, [])
 
@@ -327,8 +365,9 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
 
     if (w < 10 || h < 10) return
 
+    // 일괄 캡처 모드에서는 블록 선택 불필요 (변환 시 자동 생성)
     const targetBlockId = useAppStore.getState().activeBlockId
-    if (!targetBlockId) {
+    if (!batchMode && !targetBlockId) {
       setCaptureError('먼저 에디터 블록을 선택하거나 추가해주세요.')
       return
     }
@@ -382,8 +421,8 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
       (y + h) / canvasH,
     ]
 
-    // 이미지 크롭 모드: PDF를 고해상도로 렌더링 후 크롭
-    if (imgCropMode) {
+    // 이미지 크롭 모드: PDF를 고해상도로 렌더링 후 크롭 (블록 필수)
+    if (imgCropMode && targetBlockId) {
       const { currentPage: curPage } = useAppStore.getState()
 
       let highResDataUrl = dataUrl  // fallback: 화면 canvas 크롭
@@ -464,6 +503,20 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
       }
       return
     }
+
+    // 일괄 캡처 모드: 큐에 추가 후 다음 캡처 대기
+    if (batchMode) {
+      // stale state 정규화: batch 모드에서는 항상 OD ON + IMG OFF
+      if (!odEnabled) setOdEnabled(true)
+      if (imgCropMode) setImgCropMode(false)
+      const { pdfPath, currentPage } = useAppStore.getState()
+      if (!batchCaptureState?.active) startBatchMode()
+      addCapture(base64, currentPage - 1, captureBboxNorm, pdfPath)
+      return
+    }
+
+    // 이하 개별 캡처 — targetBlockId 필수
+    if (!targetBlockId) return
 
     setLastCapture({ base64, blockId: targetBlockId, captureBboxNorm })
 
@@ -751,24 +804,24 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
           onMouseUp={(e) => e.stopPropagation()}
         >
           <button
-            className={`text-xs px-2.5 py-1 rounded-full shadow transition-colors cursor-pointer ${
-              imgCropMode
-                ? 'bg-green-500 text-white'
-                : 'bg-white/90 text-gray-600 hover:bg-gray-100'
+            className={`text-xs px-2.5 py-1 rounded-full shadow transition-colors ${
+              batchMode ? 'bg-gray-300 text-gray-400 cursor-not-allowed' :
+              imgCropMode ? 'bg-green-500 text-white cursor-pointer' :
+              'bg-white/90 text-gray-600 hover:bg-gray-100 cursor-pointer'
             }`}
-            onClick={() => { setImgCropMode(!imgCropMode); if (!imgCropMode) setOdEnabled(false) }}
-            title={imgCropMode ? '이미지 크롭 모드 ON — 드래그 영역을 이미지로 삽입' : '이미지 크롭 모드 OFF'}
+            onClick={() => { if (batchMode) return; setImgCropMode(!imgCropMode); if (!imgCropMode) setOdEnabled(false) }}
+            title={batchMode ? '일괄 캡처 모드에서는 IMG 크롭을 사용할 수 없습니다' : imgCropMode ? '이미지 크롭 모드 ON — 드래그 영역을 이미지로 삽입' : '이미지 크롭 모드 OFF'}
           >
             {imgCropMode ? 'IMG ON' : 'IMG'}
           </button>
           <button
-            className={`text-xs px-2.5 py-1 rounded-full shadow transition-colors cursor-pointer ${
-              odEnabled
-                ? 'bg-blue-500 text-white'
-                : 'bg-white/90 text-gray-600 hover:bg-gray-100'
+            className={`text-xs px-2.5 py-1 rounded-full shadow transition-colors ${
+              batchMode ? (odEnabled ? 'bg-blue-500 text-white cursor-not-allowed' : 'bg-gray-300 text-gray-400 cursor-not-allowed') :
+              odEnabled ? 'bg-blue-500 text-white cursor-pointer' :
+              'bg-white/90 text-gray-600 hover:bg-gray-100 cursor-pointer'
             }`}
-            onClick={() => { setOdEnabled(!odEnabled); if (!odEnabled) setImgCropMode(false) }}
-            title={odEnabled ? 'OD 레이아웃 분석 ON' : 'OD 레이아웃 분석 OFF'}
+            onClick={() => { if (batchMode) return; setOdEnabled(!odEnabled); if (!odEnabled) setImgCropMode(false) }}
+            title={batchMode ? '일괄 캡처 모드에서는 OD가 항상 활성화됩니다' : odEnabled ? 'OD 레이아웃 분석 ON' : 'OD 레이아웃 분석 OFF'}
           >
             {odEnabled ? 'OD ON' : 'OD OFF'}
           </button>

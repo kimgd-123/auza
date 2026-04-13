@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ChatMessage, EditorBlock, PanelSizes, SavedOdData } from '@/types'
+import type { ChatMessage, EditorBlock, PanelSizes, SavedOdData, BatchCaptureState, BatchCaptureSegment } from '@/types'
 import type { LayoutMode } from '@/components/layout/LayoutPicker'
 
 interface AppState {
@@ -86,6 +86,18 @@ interface AppState {
   toggleBlockCollapse: (id: string) => void
   collapseAllBlocks: () => void
   expandAllBlocks: () => void
+
+  // 일괄 캡처 (Batch Capture)
+  batchCaptureState: BatchCaptureState | null
+  setBatchCaptureState: (state: BatchCaptureState | null) => void
+  updateBatchCaptureState: (updates: Partial<BatchCaptureState>) => void
+  addBatchSegment: (seg: BatchCaptureSegment) => void
+  updateBatchSegment: (segId: string, updates: Partial<BatchCaptureSegment>) => void
+  removeBatchSegment: (segId: string) => void
+
+  // 캡처 모드 (개별/일괄)
+  batchMode: boolean
+  setBatchMode: (batch: boolean) => void
 
   // 릴리즈 노트 모달 (단일 source of truth)
   releaseNotesOpen: boolean
@@ -292,6 +304,46 @@ export const useAppStore = create<AppState>((set, get) => ({
       collapsedBlockIds: new Set(state.blocks.map((b) => b.id)),
     })),
   expandAllBlocks: () => set({ collapsedBlockIds: new Set<string>() }),
+
+  // 일괄 캡처
+  batchCaptureState: null,
+  setBatchCaptureState: (state) => set({ batchCaptureState: state }),
+  updateBatchCaptureState: (updates) =>
+    set((state) => ({
+      batchCaptureState: state.batchCaptureState
+        ? { ...state.batchCaptureState, ...updates }
+        : null,
+    })),
+  addBatchSegment: (seg) =>
+    set((state) => ({
+      batchCaptureState: state.batchCaptureState
+        ? { ...state.batchCaptureState, segments: [...state.batchCaptureState.segments, seg] }
+        : null,
+    })),
+  updateBatchSegment: (segId, updates) =>
+    set((state) => ({
+      batchCaptureState: state.batchCaptureState
+        ? {
+            ...state.batchCaptureState,
+            segments: state.batchCaptureState.segments.map((s) =>
+              s.id === segId ? { ...s, ...updates } : s
+            ),
+          }
+        : null,
+    })),
+  removeBatchSegment: (segId) =>
+    set((state) => ({
+      batchCaptureState: state.batchCaptureState
+        ? {
+            ...state.batchCaptureState,
+            segments: state.batchCaptureState.segments.filter((s) => s.id !== segId),
+          }
+        : null,
+    })),
+
+  // 캡처 모드 (기본: 일괄)
+  batchMode: true,
+  setBatchMode: (batch) => set({ batchMode: batch }),
 
   // 릴리즈 노트 모달
   releaseNotesOpen: false,
