@@ -19,6 +19,10 @@ interface Props {
   captureImageSize: { w: number; h: number }
   onConfirm: (editedDetections: OdDetection[]) => void
   onCancel: () => void
+  /** embedded 모드: backdrop/하단 버튼 없이 콘텐츠만 렌더 (BatchReviewModal 내장용) */
+  embedded?: boolean
+  /** 부모가 현재 편집 상태를 읽을 수 있도록 콜백 (embedded 모드용) */
+  onDetsChange?: (dets: OdDetection[]) => void
 }
 
 type DragMode = 'move' | 'resize-nw' | 'resize-n' | 'resize-ne' | 'resize-e' | 'resize-se' | 'resize-s' | 'resize-sw' | 'resize-w' | null
@@ -29,10 +33,18 @@ export default function OdReviewOverlay({
   captureImageSize,
   onConfirm,
   onCancel,
+  embedded = false,
+  onDetsChange,
 }: Props) {
   const [dets, setDets] = useState<OdDetection[]>(() =>
     initialDetections.map(d => ({ ...d }))
   )
+
+  // embedded 모드: 편집 상태를 부모에 실시간 전달
+  useEffect(() => {
+    if (onDetsChange) onDetsChange(dets)
+  }, [dets, onDetsChange])
+
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [dragMode, setDragMode] = useState<DragMode>(null)
   const [isDrawing, setIsDrawing] = useState(false)
@@ -276,18 +288,14 @@ export default function OdReviewOverlay({
     height: Math.abs(drawRect.ey - drawRect.sy),
   } : null
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <div className="bg-white rounded-lg shadow-xl flex flex-col" style={{ maxWidth: maxW + 40, maxHeight: '90vh' }}>
-        {/* 헤더 */}
-        <div className="px-4 py-2 border-b flex items-center justify-between bg-gray-50 rounded-t-lg flex-shrink-0">
-          <span className="text-sm font-medium text-gray-700">
-            OD 검출 결과 확인 — {dets.length}개 영역
-          </span>
+  // embedded 모드: 헤더+이미지+편집 UI만 렌더 (backdrop/하단 버튼 없음)
+  const content = (
+    <div className={embedded ? 'flex flex-col' : 'bg-white rounded-lg shadow-xl flex flex-col'} style={embedded ? {} : { maxWidth: maxW + 40, maxHeight: '90vh' }}>
+      {/* 헤더 */}
+      <div className="px-4 py-2 border-b flex items-center justify-between bg-gray-50 rounded-t-lg flex-shrink-0">
+        <span className="text-sm font-medium text-gray-700">
+          OD 검출 결과 확인 — {dets.length}개 영역
+        </span>
           <div className="flex items-center gap-2 text-xs">
             {selectedDet && (
               <>
@@ -391,27 +399,40 @@ export default function OdReviewOverlay({
           </div>
         </div>
 
-        {/* 하단 버튼 */}
-        <div className="px-4 py-2 border-t flex items-center justify-between bg-gray-50 rounded-b-lg flex-shrink-0">
-          <div className="text-xs text-gray-500">
-            Delete: 삭제 | Ctrl+C/V: 복사/붙여넣기 | Enter: 변환 실행 | Esc: 취소
+        {/* 하단 버튼 — embedded 모드에서는 숨김 (부모가 처리) */}
+        {!embedded && (
+          <div className="px-4 py-2 border-t flex items-center justify-between bg-gray-50 rounded-b-lg flex-shrink-0">
+            <div className="text-xs text-gray-500">
+              Delete: 삭제 | Ctrl+C/V: 복사/붙여넣기 | Enter: 변환 실행 | Esc: 취소
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={onCancel}
+                className="px-3 py-1 text-sm rounded bg-gray-200 text-gray-700 hover:bg-gray-300"
+              >
+                취소
+              </button>
+              <button
+                onClick={() => onConfirm(dets)}
+                className="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-700"
+              >
+                변환 실행 ({dets.filter(d => d.region !== 'abandon').length}개)
+              </button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={onCancel}
-              className="px-3 py-1 text-sm rounded bg-gray-200 text-gray-700 hover:bg-gray-300"
-            >
-              취소
-            </button>
-            <button
-              onClick={() => onConfirm(dets)}
-              className="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-700"
-            >
-              변환 실행 ({dets.filter(d => d.region !== 'abandon').length}개)
-            </button>
-          </div>
-        </div>
+        )}
       </div>
+  )
+
+  if (embedded) return content
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {content}
     </div>
   )
 }

@@ -21,10 +21,18 @@ React Renderer (UI) ↔ IPC ↔ Electron Main ↔ child_process (stdin/stdout JS
 - **CharShape 리셋**: 서식 적용 텍스트 삽입 후 반드시 Bold/Italic/Underline/Color 초기화 (번짐 방지)
 - **Gemini SDK**: `google-genai` (신규) — VisionClient 인터페이스 + GeminiDirectClient (api_key별 캐싱, 재시도/timeout)
 - **Gemini 병렬화**: ThreadPoolExecutor로 Gemini 호출만 병렬, figure/PyMuPDF는 메인 스레드 순차 유지
+- **일괄 변환 (v2.3.0~)**: `od_convert_many` — 여러 세그먼트를 단일 IPC로 Python에 전달, 전체 region을 하나의 Pool에서 병렬 처리. 개별 캡처 경로(`od_convert`)는 그대로 유지
+- **Batch 모드 state 정규화**: AreaCapture batchMode=true 시 useEffect 로 imgCropMode=false, odEnabled=true 강제. drag handler 는 batch 분기를 IMG 크롭보다 먼저 실행. 버튼 표시도 batch 에서 raw state 대신 정규화된 값 노출
+- **batch 동적 timeout**: `base(5분) + ceil(tasks/effectiveWorkers) × 180초`, `legacyFloor(3분 + 세그먼트×2분)` 를 minimum 으로 보장, 상한 60분. `AUZA_GEMINI_PARALLEL_DISABLE=1` 이면 effectiveWorkers=1 로 정렬
+- **batch 진행률 UI**: 단일 IPC 구조상 per-segment 중간 상태가 없음 → 큐 표시는 indeterminate (`변환 중... (N개)`)
+- **Residual Risk**: timeout 발생 시 Python child 복구 경로 미구현 (별도 phase), 프론트엔드 테스트 인프라 부재 (`doc/DEFERRED_TEST_INFRA.md`)
 - **부분 성공**: 프런트엔드는 `html`이 있으면 삽입 진행, `error`는 비차단 경고 (console.warn)
 - **Python 패키지**: 시작 시 bs4/pywin32/Pillow/google-genai 자동 체크 + pip install (테스터 PC 대응)
+- **OD 패키지 설치**: embed Python은 `--target <od-dir> --upgrade`, system Python은 `--force-reinstall` (v2.3.0 수정 — `--force-reinstall` + `--target` 조합은 잔재 디렉토리에서 불완전 설치 유발)
 - **세션**: %APPDATA%/AUZA-v2/session.json 자동 저장 (ProseMirror JSON)
 - **자동 업데이트**: electron-updater + GitHub Releases, 앱 시작 3초 후 체크
+- **CSP**: production은 `script-src 'self'`, 개발 모드는 Vite HMR을 위해 `'unsafe-inline'` + `ws://localhost:*` 허용
+- **캡처 모드**: 개별 캡처 / 일괄 캡처 선택 (기본: 일괄), OD-on + Review-on이 기본값
 
 ## to Claude
 1. Thinking은 반드시 한국어로 진행, compacted 후에도 이 규칙 준수
@@ -61,7 +69,9 @@ React Renderer (UI) ↔ IPC ↔ Electron Main ↔ child_process (stdin/stdout JS
 - **Python 의존성**: `python/requirements.txt` (beautifulsoup4, pywin32, Pillow, PyMuPDF, google-genai)
 - **Gemini SDK**: `google-genai>=0.8` (신규 SDK, `google-generativeai`는 EOL)
 - **VisionClient**: `python/od/vision_client.py` — GeminiDirectClient (api_key별 캐싱, 재시도, timeout)
-- **병렬화**: `python/od/analyzer.py` — ThreadPoolExecutor (기본 4워커), figure/PyMuPDF는 메인 스레드 순차
-- **Feature Flag**: `AUZA_GEMINI_PARALLEL_DISABLE=1` (순차 fallback), `AUZA_GEMINI_PARALLEL=N` (워커 수 1~10)
+- **병렬화**: `python/od/analyzer.py` — ThreadPoolExecutor (기본 8워커, v2.3.0~), figure/PyMuPDF는 메인 스레드 순차
+- **Feature Flag**: `AUZA_GEMINI_PARALLEL_DISABLE=1` (순차 fallback), `AUZA_GEMINI_PARALLEL=N` (워커 수 1~10, 기본 8)
 - **자동 업데이트**: electron-updater + GitHub Releases (`latest.yml`)
 - **HWP COM 속성 참고**: ParagraphShape > `Item("BorderFill")` → `SetItem("BorderTypeTop/Bottom/Left/Right", 1)` 로 문단 테두리 설정
+- **일괄 변환 경로**: `python/main.py` `od_convert_many` + `python/od/analyzer.py` `convert_regions_many` + `electron/main.ts` `capture:convertMany` IPC
+- **테스트 인프라 deferred**: `doc/DEFERRED_TEST_INFRA.md` (Vitest 도입 별도 phase)

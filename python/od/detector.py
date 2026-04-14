@@ -142,7 +142,8 @@ def _ensure_od_packages():
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         if embed:
-            # od-packages 내 잔재도 정리
+            # od-packages 내 잔재 정리 — DLL 잠김으로 부분 삭제될 수 있으므로
+            # ignore_errors=True 사용. 잔재가 남아도 --upgrade가 덮어씀.
             import shutil
             for name in os.listdir(od_dir):
                 if name.lower().startswith(('torch', 'torchvision', 'torchaudio')):
@@ -151,12 +152,14 @@ def _ensure_od_packages():
 
         install_cmd = [
             sys.executable, '-m', 'pip', 'install', '--quiet',
-            '--force-reinstall',
             'torch', 'torchvision',
             '--index-url', 'https://download.pytorch.org/whl/cpu',
         ]
         if embed:
-            install_cmd[5:5] = ['--target', od_dir]
+            install_cmd[5:5] = ['--target', od_dir, '--upgrade']
+        else:
+            # system Python: CUDA→CPU 강제 교체 등을 위해 --force-reinstall 유지
+            install_cmd.insert(5, '--force-reinstall')
 
         subprocess.check_call(install_cmd, stdout=subprocess.DEVNULL)
         # smoke test

@@ -62,17 +62,22 @@ app.whenReady().then(() => {
 
   // ── CSP (Content-Security-Policy) 설정 ──
   const { session: electronSession } = require('electron')
+  const isDev = !app.isPackaged
   electronSession.defaultSession.webRequest.onHeadersReceived((details: any, callback: any) => {
+    const scriptSrc = isDev ? " script-src 'self' 'unsafe-inline';" : " script-src 'self';"
+    const connectSrc = isDev
+      ? " connect-src 'self' ws://localhost:* http://localhost:* https://generativelanguage.googleapis.com https://*.googleapis.com;"
+      : " connect-src 'self' https://generativelanguage.googleapis.com https://*.googleapis.com;"
     callback({
       responseHeaders: {
         ...details.responseHeaders,
         'Content-Security-Policy': [
           "default-src 'self';" +
-          " script-src 'self';" +
+          scriptSrc +
           " style-src 'self' 'unsafe-inline';" +
           " img-src 'self' data: blob:;" +
           " font-src 'self' data:;" +
-          " connect-src 'self' https://generativelanguage.googleapis.com https://*.googleapis.com;" +
+          connectSrc +
           " worker-src 'self' blob:;",
         ],
       },
@@ -492,6 +497,95 @@ ipcMain.handle('capture:convert', async (_event, payload: {
     }
   } catch (err) {
     return { html: null, regions: 0, error: (err as Error).message }
+  }
+})
+
+// IPC: 일괄 캡처 전용 — 여러 세그먼트를 한 번에 변환 (Python 내부 단일 Pool 병렬화)
+ipcMain.handle('capture:convertMany', async (_event, payload: {
+  segments: Array<{
+    imageBase64: string
+    detections: unknown[]
+    pdfPath?: string
+    pageNum?: number
+    captureBboxNorm?: number[]
+  }>
+}) => {
+  try {
+    const apiKey = await loadGeminiApiKey()
+    if (!apiKey) {
+      return { results: [], error: 'Gemini API 키가 설정되지 않았습니다.' }
+    }
+    const segments = Array.isArray(payload?.segments) ? payload.segments : []
+    if (segments.length === 0) {
+      return { results: [], error: 'segments가 비어있습니다.' }
+    }
+
+    // 각 세그먼트의 pdfPath를 allowlist로 검증
+    const normalizedSegments = segments.map((s) => ({
+      imageBase64: s.imageBase64,
+      detections: s.detections,
+      pdfPath: validatePdfPath(s.pdfPath) || '',
+      pageNum: s.pageNum ?? -1,
+      captureBboxNorm: s.captureBboxNorm || null,
+    }))
+
+    // 실제 Gemini task 수 기반 동적 timeout (wave 단위 계산)
+    // Why: 단순히 세그먼트 수만 기반으로 잡으면 region-heavy 배치(세그먼트당 detection 4+)에서
+    //      Python은 계속 일하는데 Electron이 먼저 timeout → 이후 Python 명령도 블로킹됨 (F1 High).
+    // 공식: base + ceil(totalTasks / effectiveWorkers) * perWaveTime
+    //   - totalTasks: 각 세그먼트의 non-figure detection 수 합계 (detections 없으면 1 — whole-image fallback)
+    //   - effectiveWorkers: AUZA_GEMINI_PARALLEL_DISABLE=1 이면 1, 아니면 AUZA_GEMINI_PARALLEL (기본 4)
+    //     — Python _get_parallel_workers() 와 동일한 규칙으로 정렬해 실제 실행 모드와 일치시킴
+    //   - PER_WAVE_TIMEOUT: Gemini Vision 1 wave 보수적 상한 (180초 = 60초 × 재시도 3회 + backoff)
+    //   - legacyFloor: 예전 공식(세그먼트당 2분 + 기본 3분)을 최소값으로 보장해 regression 방지
+    const countTasks = (s: { detections: unknown[] }): number => {
+      const dets = Array.isArray(s.detections) ? s.detections : []
+      if (dets.length === 0) return 1
+      // figure detection은 Gemini 호출 없이 이미지 직접 삽입(trust_labels)이라 task에 포함 안 함
+      const nonFigure = dets.filter((d) => {
+        const region = (d as { region?: string })?.region
+        return region !== 'figure' && region !== 'abandon'
+      }).length
+      return Math.max(nonFigure, 1)
+    }
+    const totalTasks = segments.reduce((sum, s) => sum + countTasks(s), 0)
+
+    const parallelDisabled = (process.env.AUZA_GEMINI_PARALLEL_DISABLE || '').trim() === '1'
+    const workersRaw = parseInt(process.env.AUZA_GEMINI_PARALLEL || '8', 10)
+    const configuredWorkers = Number.isFinite(workersRaw) && workersRaw >= 1 && workersRaw <= 10 ? workersRaw : 8
+    const effectiveWorkers = parallelDisabled ? 1 : configuredWorkers
+    const waves = Math.ceil(totalTasks / effectiveWorkers)
+
+    const BASE_TIMEOUT = 5 * 60 * 1000           // 5분 base (IPC + Python 초기화 + 여유)
+    const PER_WAVE_TIMEOUT = 180 * 1000          // wave당 180초 (Gemini 60s × 재시도 3회 + backoff 상한)
+    const MAX_TIMEOUT = 60 * 60 * 1000           // 60분 절대 상한
+    const taskBasedTimeout = BASE_TIMEOUT + waves * PER_WAVE_TIMEOUT
+    const legacyFloor = 3 * 60 * 1000 + segments.length * 2 * 60 * 1000
+    const timeout = Math.min(Math.max(taskBasedTimeout, legacyFloor), MAX_TIMEOUT)
+
+    console.log(`[capture:convertMany] segments=${segments.length} totalTasks=${totalTasks} ` +
+                `effectiveWorkers=${effectiveWorkers} (parallelDisabled=${parallelDisabled}) ` +
+                `waves=${waves} timeout=${Math.round(timeout / 1000)}s ` +
+                `(taskBased=${Math.round(taskBasedTimeout / 1000)}s, legacyFloor=${Math.round(legacyFloor / 1000)}s)`)
+
+    const result = await sendPythonCommand('od_convert_many', {
+      segments: normalizedSegments,
+      apiKey,
+    }, timeout)
+
+    if (!result.success || !result.data) {
+      return { results: [], error: result.error || '일괄 변환에 실패했습니다.' }
+    }
+    const data = result.data as {
+      results: Array<{ html: string; regions: number; error: string | null }>
+      error: string | null
+    }
+    return {
+      results: data.results || [],
+      error: data.error || null,
+    }
+  } catch (err) {
+    return { results: [], error: (err as Error).message }
   }
 })
 
