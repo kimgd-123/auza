@@ -109,18 +109,21 @@ def _get_parallel_workers() -> int:
 
     환경변수:
         AUZA_GEMINI_PARALLEL_DISABLE=1 → 0 (순차)
-        AUZA_GEMINI_PARALLEL=N (1~10) → N (기본 4)
+        AUZA_GEMINI_PARALLEL=N (1~10) → N (기본 8)
+
+    기본 8 사유: 유료 티어 Gemini API 사용 시 동시 호출 상한 여유로 region 많은
+    일반 교재 캡처(세그먼트당 region 4~10개)에서 wave 수 절반으로 단축.
     """
     if os.environ.get("AUZA_GEMINI_PARALLEL_DISABLE", "").strip() == "1":
         return 0
-    raw = os.environ.get("AUZA_GEMINI_PARALLEL", "4").strip()
+    raw = os.environ.get("AUZA_GEMINI_PARALLEL", "8").strip()
     try:
         n = int(raw)
         if n < 1 or n > 10:
-            return 4
+            return 8
         return n
     except (ValueError, TypeError):
-        return 4
+        return 8
 
 
 def convert_regions(image_base64: str, detections: list, api_key: str,

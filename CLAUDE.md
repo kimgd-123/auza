@@ -64,7 +64,7 @@ React Renderer (UI) ↔ IPC ↔ Electron Main ↔ child_process (stdin/stdout JS
 - **Python 의존성**: `python/requirements.txt` (beautifulsoup4, pywin32, Pillow, PyMuPDF, google-genai)
 - **Gemini SDK**: `google-genai>=0.8` (신규 SDK, `google-generativeai`는 EOL)
 - **VisionClient**: `python/od/vision_client.py` — GeminiDirectClient (api_key별 캐싱, 재시도, timeout)
-- **병렬화**: `python/od/analyzer.py` — ThreadPoolExecutor (기본 4워커), figure/PyMuPDF는 메인 스레드 순차
-- **Feature Flag**: `AUZA_GEMINI_PARALLEL_DISABLE=1` (순차 fallback), `AUZA_GEMINI_PARALLEL=N` (워커 수 1~10)
+- **병렬화**: `python/od/analyzer.py` — ThreadPoolExecutor (기본 8워커, v2.3.0~), figure/PyMuPDF는 메인 스레드 순차
+- **Feature Flag**: `AUZA_GEMINI_PARALLEL_DISABLE=1` (순차 fallback), `AUZA_GEMINI_PARALLEL=N` (워커 수 1~10, 기본 8)
 - **자동 업데이트**: electron-updater + GitHub Releases (`latest.yml`)
 - **HWP COM 속성 참고**: ParagraphShape > `Item("BorderFill")` → `SetItem("BorderTypeTop/Bottom/Left/Right", 1)` 로 문단 테두리 설정

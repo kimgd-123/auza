@@ -551,8 +551,8 @@ ipcMain.handle('capture:convertMany', async (_event, payload: {
     const totalTasks = segments.reduce((sum, s) => sum + countTasks(s), 0)
 
     const parallelDisabled = (process.env.AUZA_GEMINI_PARALLEL_DISABLE || '').trim() === '1'
-    const workersRaw = parseInt(process.env.AUZA_GEMINI_PARALLEL || '4', 10)
-    const configuredWorkers = Number.isFinite(workersRaw) && workersRaw >= 1 && workersRaw <= 10 ? workersRaw : 4
+    const workersRaw = parseInt(process.env.AUZA_GEMINI_PARALLEL || '8', 10)
+    const configuredWorkers = Number.isFinite(workersRaw) && workersRaw >= 1 && workersRaw <= 10 ? workersRaw : 8
     const effectiveWorkers = parallelDisabled ? 1 : configuredWorkers
     const waves = Math.ceil(totalTasks / effectiveWorkers)
 
