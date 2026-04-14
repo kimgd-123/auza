@@ -49,14 +49,8 @@ function buildHwpPayload(blocks: EditorBlock[]): {
 
   for (const block of blocks) {
     try {
-      if (block.title?.trim()) {
-        const escaped = block.title.trim()
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-        htmlParts.push(`<h2>${escaped}</h2>`)
-      }
-
+      // 블록 제목은 UI 레이블(예: "캡처 p.1")로만 사용하고 HWP 본문에는 삽입하지 않는다.
+      // 섹션 헤더가 필요한 사용자는 에디터 본문에서 H1/H2 버튼으로 직접 입력.
       const doc = JSON.parse(block.content)
       const html = prosemirrorToHtml(doc)
       htmlParts.push(html)
