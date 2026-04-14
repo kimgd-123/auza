@@ -19,6 +19,7 @@ export interface ElectronAPI {
   analyzeCapture: (imageBase64: string, options?: { pdfPath?: string; pageNum?: number; captureBboxNorm?: number[] }) => Promise<{ html: string | null; regions: number; error: string | null }>
   detectRegions: (imageBase64: string) => Promise<OdDetectionResult>
   convertRegions: (payload: OdConvertPayload) => Promise<{ html: string | null; regions: number; error: string | null }>
+  convertManyRegions: (payload: { segments: OdConvertPayload[] }) => Promise<{ results: Array<{ html: string; regions: number; error: string | null }>; error: string | null }>
   geminiChat: (payload: { messages: Array<{ role: string; text: string }>; context?: string }) => Promise<{ text: string | null; error: string | null }>
 
   // HWP 연동

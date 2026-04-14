@@ -236,6 +236,20 @@ def handle_command(command: str, payload: dict) -> dict:
             trust_labels=True,  # 사용자가 리뷰에서 편집한 유형을 신뢰
         )
 
+    elif command == 'od_convert_many':
+        # 일괄 캡처 전용 — 여러 세그먼트의 Gemini 호출을 단일 Pool에서 병렬 처리
+        from od.analyzer import convert_regions_many
+
+        segments = payload.get('segments', [])
+        api_key = payload.get('apiKey', '')
+
+        if not isinstance(segments, list) or not segments:
+            return {"error": "segments 배열이 필요합니다"}
+        if not api_key:
+            return {"error": "apiKey가 필요합니다"}
+
+        return convert_regions_many(segments, api_key)
+
     else:
         return {"error": f"Unknown command: {command}"}
 

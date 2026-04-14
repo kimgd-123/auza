@@ -11,8 +11,6 @@ export default function BatchCaptureQueue() {
   const segments = batchCaptureState.segments
   const detectedCount = segments.filter((s) => s.status === 'detected' || s.status === 'reviewed').length
   const detectingCount = segments.filter((s) => s.status === 'detecting').length
-  const convertingCount = segments.filter((s) => s.status === 'converting').length
-  const convertedCount = segments.filter((s) => s.status === 'converted').length
   const errorCount = segments.filter((s) => s.status === 'error').length
   const canReview = detectedCount > 0 && detectingCount === 0 && !isConverting
 
@@ -32,12 +30,13 @@ export default function BatchCaptureQueue() {
             </span>
           )}
           {isConverting && (
+            // 단일 IPC로 일괄 변환되므로 per-segment 완료 수 표기 대신 indeterminate로 표시
             <span className="text-blue-600">
               <svg className="w-3 h-3 animate-spin inline mr-0.5" viewBox="0 0 24 24" fill="none">
                 <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
                 <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="opacity-75" />
               </svg>
-              변환 중 {convertedCount}/{segments.length}
+              변환 중... ({segments.length}개)
             </span>
           )}
           {errorCount > 0 && (

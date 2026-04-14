@@ -103,6 +103,16 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
   const [odProgress, setOdProgress] = useState<OdProgress | null>(null)
   const [imgCropMode, setImgCropMode] = useState(false)
 
+  // 일괄 캡처 모드 진입 시 stale state 정규화: IMG OFF, OD ON 강제
+  // Why: individual 모드에서 IMG ON/OD OFF로 설정한 뒤 batch 모드로 전환하면
+  // UI 버튼 표시와 실행 경로가 분기해 드래그 시 IMG crop 또는 OD OFF 경로로 샐 수 있음
+  useEffect(() => {
+    if (batchMode) {
+      if (imgCropMode) setImgCropMode(false)
+      if (!odEnabled) setOdEnabled(true)
+    }
+  }, [batchMode, imgCropMode, odEnabled, setOdEnabled])
+
   // v2.1 OD Review Step
   const [pendingReview, setPendingReview] = useState<PendingOdReview | null>(null)
 
@@ -378,8 +388,10 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
     const srcW = w * dpr
     const srcH = h * dpr
 
-    // 최소 캡처 해상도 보장 — OD/IMG 크롭: 2000px, 일반: 800px
-    const minLongSide = (odEnabled || imgCropMode) ? 2000 : 800
+    // 최소 캡처 해상도 보장 — OD/IMG 크롭/batch: 2000px, 일반: 800px
+    // batchMode 포함 이유: individual(OD OFF)에서 batch로 전환한 직후 첫 드래그는
+    // useEffect 정규화가 반영되기 전이라 raw state를 보면 800px로 캡처될 수 있음
+    const minLongSide = (batchMode || odEnabled || imgCropMode) ? 2000 : 800
     const longSide = Math.max(srcW, srcH)
     let captureScale = longSide < minLongSide ? minLongSide / longSide : 1.0
 
@@ -420,6 +432,18 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
       (x + w) / canvasW,
       (y + h) / canvasH,
     ]
+
+    // 일괄 캡처 모드 우선 분기 — IMG/OD 로컬 state가 아직 정규화되지 않은
+    // 전환 시점의 드래그에서도 batch 큐로 바로 진입시키기 위해 최우선으로 처리
+    if (batchMode) {
+      // stale state 정규화 (effect가 늦게 반영되는 경우 방어)
+      if (!odEnabled) setOdEnabled(true)
+      if (imgCropMode) setImgCropMode(false)
+      const { pdfPath, currentPage } = useAppStore.getState()
+      if (!batchCaptureState?.active) startBatchMode()
+      addCapture(base64, currentPage - 1, captureBboxNorm, pdfPath)
+      return
+    }
 
     // 이미지 크롭 모드: PDF를 고해상도로 렌더링 후 크롭 (블록 필수)
     if (imgCropMode && targetBlockId) {
@@ -504,18 +528,8 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
       return
     }
 
-    // 일괄 캡처 모드: 큐에 추가 후 다음 캡처 대기
-    if (batchMode) {
-      // stale state 정규화: batch 모드에서는 항상 OD ON + IMG OFF
-      if (!odEnabled) setOdEnabled(true)
-      if (imgCropMode) setImgCropMode(false)
-      const { pdfPath, currentPage } = useAppStore.getState()
-      if (!batchCaptureState?.active) startBatchMode()
-      addCapture(base64, currentPage - 1, captureBboxNorm, pdfPath)
-      return
-    }
-
     // 이하 개별 캡처 — targetBlockId 필수
+    // (batch 모드는 위에서 이미 최우선 분기로 처리됨)
     if (!targetBlockId) return
 
     setLastCapture({ base64, blockId: targetBlockId, captureBboxNorm })
@@ -803,6 +817,8 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
           onMouseDown={(e) => e.stopPropagation()}
           onMouseUp={(e) => e.stopPropagation()}
         >
+          {/* batch 모드에서는 raw state 대신 정규화된 값("IMG OFF", "OD ON")을 표시해
+              실행 경로와 UI가 항상 일치하도록 함 */}
           <button
             className={`text-xs px-2.5 py-1 rounded-full shadow transition-colors ${
               batchMode ? 'bg-gray-300 text-gray-400 cursor-not-allowed' :
@@ -812,18 +828,18 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
             onClick={() => { if (batchMode) return; setImgCropMode(!imgCropMode); if (!imgCropMode) setOdEnabled(false) }}
             title={batchMode ? '일괄 캡처 모드에서는 IMG 크롭을 사용할 수 없습니다' : imgCropMode ? '이미지 크롭 모드 ON — 드래그 영역을 이미지로 삽입' : '이미지 크롭 모드 OFF'}
           >
-            {imgCropMode ? 'IMG ON' : 'IMG'}
+            {batchMode ? 'IMG' : (imgCropMode ? 'IMG ON' : 'IMG')}
           </button>
           <button
             className={`text-xs px-2.5 py-1 rounded-full shadow transition-colors ${
-              batchMode ? (odEnabled ? 'bg-blue-500 text-white cursor-not-allowed' : 'bg-gray-300 text-gray-400 cursor-not-allowed') :
+              batchMode ? 'bg-blue-500 text-white cursor-not-allowed' :
               odEnabled ? 'bg-blue-500 text-white cursor-pointer' :
               'bg-white/90 text-gray-600 hover:bg-gray-100 cursor-pointer'
             }`}
             onClick={() => { if (batchMode) return; setOdEnabled(!odEnabled); if (!odEnabled) setImgCropMode(false) }}
             title={batchMode ? '일괄 캡처 모드에서는 OD가 항상 활성화됩니다' : odEnabled ? 'OD 레이아웃 분석 ON' : 'OD 레이아웃 분석 OFF'}
           >
-            {odEnabled ? 'OD ON' : 'OD OFF'}
+            {batchMode ? 'OD ON' : (odEnabled ? 'OD ON' : 'OD OFF')}
           </button>
           {odEnabled && (
             <button

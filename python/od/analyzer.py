@@ -22,15 +22,23 @@ from .detector import detect_regions_from_image, crop_region_from_image, sort_re
 from .gemini_vision import call_gemini_vision, get_prompt_for_region, PROMPT_FIGURE_CHECK
 
 
-def _emit_progress(step: str, current: int = 0, total: int = 0, detail: str = ""):
-    """진행 상황을 stderr JSON으로 출력 — Electron이 파싱하여 UI에 전달"""
-    msg = json.dumps({
+def _emit_progress(step: str, current: int = 0, total: int = 0, detail: str = "",
+                   segment_index: int = -1, segment_total: int = 0):
+    """진행 상황을 stderr JSON으로 출력 — Electron이 파싱하여 UI에 전달
+
+    segment_index/segment_total: 일괄 변환 시 세그먼트 컨텍스트 (없으면 -1/0)
+    """
+    payload = {
         "type": "od-progress",
         "step": step,
         "current": current,
         "total": total,
         "detail": detail,
-    }, ensure_ascii=False)
+    }
+    if segment_index >= 0:
+        payload["segmentIndex"] = segment_index
+        payload["segmentTotal"] = segment_total
+    msg = json.dumps(payload, ensure_ascii=False)
     sys.stderr.write(f"[od-progress] {msg}\n")
     sys.stderr.flush()
 
@@ -358,6 +366,269 @@ def convert_regions(image_base64: str, detections: list, api_key: str,
         "regions": total,
         "error": "; ".join(errors) if errors else None,
     }
+
+
+def convert_regions_many(segments: list, api_key: str) -> dict:
+    """여러 세그먼트를 한 번에 변환 — 모든 세그먼트의 Gemini 호출을
+    단일 ThreadPoolExecutor에서 병렬 처리하여 전체 소요 시간 단축.
+
+    Args:
+        segments: [{imageBase64, detections, pdfPath?, pageNum?, captureBboxNorm?}, ...]
+        api_key: Gemini API 키
+
+    Returns:
+        {"results": [{html, regions, error}, ...], "error": None}
+        results는 segments와 동일 순서/길이.
+    """
+    from PIL import Image
+
+    if not segments:
+        return {"results": [], "error": None}
+
+    seg_count = len(segments)
+    sys.stderr.write(f"[od-analyzer] convert_many 시작: {seg_count} 세그먼트\n")
+
+    # ────────────────────────────────────────────
+    # Phase 1: 세그먼트별 준비 (크롭 + 태스크 분류)
+    # ────────────────────────────────────────────
+    seg_states = []  # [{img, img_w, img_h, detections, tasks, pdf_path, page_num, capture_bbox_norm, error}]
+    flat_gemini_tasks = []  # [(seg_idx, task), ...]
+
+    for seg_idx, seg in enumerate(segments):
+        image_base64 = seg.get('imageBase64', '')
+        detections = seg.get('detections', []) or []
+        pdf_path = seg.get('pdfPath', '') or ''
+        page_num = seg.get('pageNum', -1)
+        capture_bbox_norm = seg.get('captureBboxNorm')
+
+        if not image_base64:
+            seg_states.append({
+                "tasks": [], "error": "imageBase64가 필요합니다",
+                "img": None, "img_w": 0, "img_h": 0, "detections": [],
+                "pdf_path": pdf_path, "page_num": page_num,
+                "capture_bbox_norm": capture_bbox_norm,
+            })
+            continue
+
+        try:
+            image_bytes = base64.b64decode(image_base64)
+            img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            img_w, img_h = img.size
+        except Exception as e:
+            seg_states.append({
+                "tasks": [], "error": f"이미지 디코드 실패: {e}",
+                "img": None, "img_w": 0, "img_h": 0, "detections": [],
+                "pdf_path": pdf_path, "page_num": page_num,
+                "capture_bbox_norm": capture_bbox_norm,
+            })
+            continue
+
+        # abandon 필터 + reading-order 재정렬
+        detections = [d for d in detections if d.get("region") != "abandon"]
+        detections = sort_regions_reading_order(detections)
+
+        tasks = []
+        if not detections:
+            # 영역 없음 → 전체 이미지 Gemini 호출 (단일 task로 등록)
+            from .gemini_vision import PROMPT_TEXT
+            whole_b64 = base64.b64encode(io.BytesIO(image_bytes).getvalue()).decode("ascii")
+            task = {
+                "index": 0, "det": {"region": "text", "box_px": [0, 0, img_w, img_h]},
+                "type": "gemini_whole",
+                "crop_b64": whole_b64, "prompt": PROMPT_TEXT,
+            }
+            tasks.append(task)
+            flat_gemini_tasks.append((seg_idx, task))
+        else:
+            for i, det in enumerate(detections):
+                region = det["region"]
+                box = det["box_px"]
+
+                if region == "figure":
+                    # trust_labels=True 고정 — 일괄 변환은 사용자 리뷰 후 진입
+                    tasks.append({"index": i, "det": det, "type": "figure_direct"})
+                else:
+                    try:
+                        crop_bytes = crop_region_from_image(img, box)
+                        crop_b64 = base64.b64encode(crop_bytes).decode("ascii")
+                    except Exception as e:
+                        sys.stderr.write(f"[od-analyzer] seg{seg_idx} 영역 {i+1} crop 실패: {e}\n")
+                        tasks.append({"index": i, "det": det, "type": "skip",
+                                      "error": f"crop 실패: {e}"})
+                        continue
+                    prompt = get_prompt_for_region(region)
+                    task = {
+                        "index": i, "det": det, "type": "gemini",
+                        "crop_b64": crop_b64, "prompt": prompt,
+                    }
+                    tasks.append(task)
+                    flat_gemini_tasks.append((seg_idx, task))
+
+        seg_states.append({
+            "tasks": tasks, "error": None,
+            "img": img, "img_w": img_w, "img_h": img_h,
+            "detections": detections,
+            "pdf_path": pdf_path, "page_num": page_num,
+            "capture_bbox_norm": capture_bbox_norm,
+        })
+
+    # ────────────────────────────────────────────
+    # Phase 2: 전체 Gemini 호출을 단일 Pool에서 병렬 실행
+    # (워커 수는 세그먼트 수와 무관하게 _get_parallel_workers() 상한 유지 — rate limit 보호)
+    # ────────────────────────────────────────────
+    workers = _get_parallel_workers()
+    total_gemini = len(flat_gemini_tasks)
+    use_parallel = workers > 0 and total_gemini > 1
+
+    sys.stderr.write(f"[od-analyzer] convert_many: Gemini 호출 {total_gemini}건 "
+                     f"(parallel={use_parallel}, workers={workers})\n")
+
+    progress_lock = threading.Lock()
+    progress_counter = [0]
+
+    def _tick(seg_idx: int, region_name: str):
+        with progress_lock:
+            progress_counter[0] += 1
+            current = progress_counter[0]
+        _emit_progress("region", current=current, total=max(total_gemini, 1),
+                       detail=f"[{seg_idx+1}/{seg_count}] {region_name} 완료",
+                       segment_index=seg_idx, segment_total=seg_count)
+
+    if use_parallel:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {}
+            for seg_idx, task in flat_gemini_tasks:
+                future = executor.submit(
+                    call_gemini_vision, api_key, task["crop_b64"], task["prompt"]
+                )
+                future_map[future] = (seg_idx, task)
+
+            for future in as_completed(future_map):
+                seg_idx, task = future_map[future]
+                region = task["det"]["region"]
+                try:
+                    task["gemini_result"] = future.result()
+                except Exception as e:
+                    task["gemini_error"] = e
+                    sys.stderr.write(f"[od-analyzer] seg{seg_idx} {region} Gemini 실패: {e}\n")
+                _tick(seg_idx, region)
+    else:
+        for seg_idx, task in flat_gemini_tasks:
+            region = task["det"]["region"]
+            try:
+                task["gemini_result"] = call_gemini_vision(
+                    api_key, task["crop_b64"], task["prompt"]
+                )
+            except Exception as e:
+                task["gemini_error"] = e
+                sys.stderr.write(f"[od-analyzer] seg{seg_idx} {region} Gemini 실패: {e}\n")
+            _tick(seg_idx, region)
+
+    # ────────────────────────────────────────────
+    # Phase 3: 세그먼트별 후처리 (메인 스레드, 순차)
+    # ────────────────────────────────────────────
+    results = []
+    for seg_idx, state in enumerate(seg_states):
+        if state["error"]:
+            results.append({"html": "", "regions": 0, "error": state["error"]})
+            continue
+
+        img = state["img"]
+        img_w = state["img_w"]
+        img_h = state["img_h"]
+        pdf_path = state["pdf_path"]
+        page_num = state["page_num"]
+        capture_bbox_norm = state["capture_bbox_norm"]
+        tasks = state["tasks"]
+        detections = state["detections"]
+
+        # 영역 미감지 → 전체 이미지 Gemini 결과 사용
+        if not detections and tasks:
+            whole_task = tasks[0]
+            if whole_task.get("gemini_error"):
+                results.append({
+                    "html": "", "regions": 0,
+                    "error": f"Gemini 호출 실패: {whole_task['gemini_error']}",
+                })
+            else:
+                results.append({
+                    "html": whole_task.get("gemini_result") or "",
+                    "regions": 0, "error": None,
+                })
+            continue
+
+        total = len(detections)
+        html_parts = [None] * total
+        errors = []
+
+        for task in tasks:
+            i = task["index"]
+            det = task["det"]
+            region = det["region"]
+            box = det["box_px"]
+
+            if task["type"] == "skip":
+                errors.append(f"영역 {i+1}: {task.get('error', 'skipped')}")
+                continue
+
+            if task["type"] == "figure_direct":
+                try:
+                    img_b64 = _get_figure_image(
+                        img, box, pdf_path, page_num, capture_bbox_norm, img_w, img_h
+                    )
+                    html_parts[i] = (
+                        f'<img src="data:image/png;base64,{img_b64}" '
+                        f'alt="캡처 이미지" style="max-width: 100%;" />'
+                    )
+                except Exception as e:
+                    sys.stderr.write(f"[od-analyzer] seg{seg_idx} 영역 {i+1} "
+                                     f"figure 이미지 생성 실패: {e}\n")
+                    try:
+                        crop_bytes = crop_region_from_image(img, box)
+                        fb64 = base64.b64encode(crop_bytes).decode("ascii")
+                        html_parts[i] = (
+                            f'<img src="data:image/png;base64,{fb64}" '
+                            f'alt="캡처 이미지" style="max-width: 100%;" />'
+                        )
+                    except Exception as e2:
+                        errors.append(f"영역 {i+1} figure 이미지 실패: {e2}")
+
+            else:  # type == "gemini"
+                gemini_err = task.get("gemini_error")
+                if gemini_err:
+                    errors.append(f"영역 {i+1} ({region}) 처리 실패: {gemini_err}")
+                    continue
+
+                result_html = task.get("gemini_result")
+                if not result_html:
+                    continue
+
+                result_html = _replace_figure_markers(
+                    result_html, img, box, pdf_path, page_num,
+                    capture_bbox_norm, img_w, img_h
+                )
+
+                if region == "boxed_text":
+                    result_html = (
+                        '<table style="border: 1px solid #000; width: 100%; border-collapse: collapse;">'
+                        '<tr><td style="padding: 8px;">'
+                        + result_html
+                        + '</td></tr></table>'
+                    )
+
+                html_parts[i] = result_html
+
+        combined = "\n".join(p for p in html_parts if p)
+        results.append({
+            "html": combined,
+            "regions": total,
+            "error": "; ".join(errors) if errors else None,
+        })
+
+    _emit_progress("done", current=total_gemini, total=max(total_gemini, 1),
+                   detail=f"일괄 변환 완료 ({seg_count}건)")
+
+    return {"results": results, "error": None}
 
 
 def analyze_capture(image_base64: str, api_key: str, od_model,

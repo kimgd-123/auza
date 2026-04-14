@@ -88,29 +88,57 @@ export function useBatchCapture() {
       (s) => (s.status === 'detected' || s.status === 'reviewed') && s.captureBase64,
     )
 
-    // 순차 변환 — Python 백엔드가 단일 stdin 루프이므로
-    // 병렬 enqueue 시 뒤 요청이 대기 중 timeout될 수 있음
-    const results: Array<{ seg: typeof segments[0]; html: string } | null> = []
+    // 일괄 변환 — 단일 IPC 호출, Python 내부에서 모든 세그먼트의 Gemini 호출을
+    // 하나의 ThreadPoolExecutor로 병렬 처리 (워커 수는 AUZA_GEMINI_PARALLEL, 기본 4)
     for (const seg of segments) {
       updateBatchSegment(seg.id, { status: 'converting' })
-      try {
-        const activeDets = (seg.detections || []).filter((d) => d.region !== 'abandon')
-        const result = await window.electronAPI.convertRegions({
+    }
+
+    const results: Array<{ seg: typeof segments[0]; html: string } | null> = []
+    try {
+      const payload = {
+        segments: segments.map((seg) => ({
           imageBase64: seg.captureBase64!,
-          detections: activeDets,
+          detections: (seg.detections || []).filter((d) => d.region !== 'abandon'),
           pdfPath: seg.pdfPath || undefined,
           pageNum: seg.pageNum,
           captureBboxNorm: seg.bboxNorm,
-        })
-        if (result.html) {
-          updateBatchSegment(seg.id, { status: 'converted', convertedHtml: result.html })
-          results.push({ seg, html: result.html })
+        })),
+      }
+      const res = await window.electronAPI.convertManyRegions(payload)
+      const manyResults = res.results || []
+
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i]
+        const r = manyResults[i]
+        if (r && r.html) {
+          updateBatchSegment(seg.id, { status: 'converted', convertedHtml: r.html })
+          if (r.error) {
+            // 부분 성공: HTML은 있지만 일부 영역 실패 → 비차단 경고
+            console.warn(`[batch-capture] seg ${seg.id} 부분 오류:`, r.error)
+          }
+          results.push({ seg, html: r.html })
         } else {
-          updateBatchSegment(seg.id, { status: 'error', error: result.error || '변환 실패' })
+          const errMsg = (r && r.error) || res.error || '변환 실패'
+          updateBatchSegment(seg.id, { status: 'error', error: errMsg })
           results.push(null)
         }
-      } catch (err) {
-        updateBatchSegment(seg.id, { status: 'error', error: (err as Error).message })
+      }
+
+      // 전체 호출이 실패해 results가 비어있는 경우(혹은 길이 불일치): 남은 세그먼트를 일괄 error 처리
+      if (manyResults.length < segments.length) {
+        for (let i = manyResults.length; i < segments.length; i++) {
+          updateBatchSegment(segments[i].id, {
+            status: 'error',
+            error: res.error || '변환 결과 누락',
+          })
+          results.push(null)
+        }
+      }
+    } catch (err) {
+      const message = (err as Error).message
+      for (const seg of segments) {
+        updateBatchSegment(seg.id, { status: 'error', error: message })
         results.push(null)
       }
     }
@@ -179,10 +207,18 @@ export function useBatchCapture() {
     }
   }, [updateBatchCaptureState, updateBatchSegment, setBatchCaptureState])
 
-  /** 실패한 세그먼트를 reviewed로 복원 → 재리뷰/재변환 가능 */
+  /** 실패한 세그먼트를 reviewed로 복원 → 재리뷰/재변환 가능
+   *  Why: 변환(converting) 중에 호출되면 in-flight 루프의 snapshot과 상태가 갈려
+   *       재변환 없이 큐가 비어버리는 회귀가 있었음. UI에서도 버튼을 숨기지만
+   *       훅 수준에서도 이중 방어.
+   */
   const retryErrorSegments = useCallback(() => {
     const state = useAppStore.getState().batchCaptureState
     if (!state) return
+    if (state.status === 'converting') {
+      console.warn('[batch-capture] 변환 중에는 재시도 불가')
+      return
+    }
     for (const seg of state.segments) {
       if (seg.status === 'error' && seg.detections) {
         updateBatchSegment(seg.id, { status: 'detected', error: undefined })
