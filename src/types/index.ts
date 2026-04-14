@@ -64,6 +64,21 @@ export interface ElectronAPI {
   getAppVersion: () => Promise<string>
   getLastSeenVersion: () => Promise<{ version: string | null }>
   setLastSeenVersion: (version: string) => Promise<{ success: boolean; error?: string }>
+
+  // 수동 업데이트 체크 (v2.3.1~)
+  checkForUpdates: () => Promise<{
+    ok: boolean
+    currentVersion?: string
+    latestVersion?: string | null
+    hasUpdate?: boolean
+    error?: string
+  }>
+  onUpdateEvent: (
+    callback: (event: {
+      type: 'available' | 'not-available' | 'progress' | 'downloaded' | 'error'
+      payload: string | number
+    }) => void,
+  ) => () => void
 }
 
 // OD 진행 상황

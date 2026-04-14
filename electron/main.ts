@@ -95,11 +95,16 @@ app.whenReady().then(() => {
       mainWindow?.webContents.send('update:available', info.version)
     })
 
+    autoUpdater.on('update-not-available', (info) => {
+      mainWindow?.webContents.send('update:not-available', info.version)
+    })
+
     autoUpdater.on('download-progress', (progress) => {
       mainWindow?.webContents.send('update:progress', Math.round(progress.percent))
     })
 
     autoUpdater.on('update-downloaded', (info) => {
+      mainWindow?.webContents.send('update:downloaded', info.version)
       dialog.showMessageBox(mainWindow!, {
         type: 'info',
         title: '업데이트 준비 완료',
@@ -115,12 +120,35 @@ app.whenReady().then(() => {
 
     autoUpdater.on('error', (err) => {
       console.error('[auto-updater] 업데이트 체크 실패:', err.message)
+      mainWindow?.webContents.send('update:error', err.message)
     })
 
     // 앱 시작 후 3초 뒤 업데이트 확인
     setTimeout(() => {
       autoUpdater.checkForUpdates().catch(() => {})
     }, 3000)
+  }
+})
+
+// 수동 업데이트 체크 — 릴리즈 노트 모달의 "업데이트 확인" 버튼에서 호출
+// Why: 자동 체크는 앱 시작 3초 후 1회만 동작. 체크 시점을 놓치거나
+//      네트워크 일시 문제로 실패한 경우 수동으로 재시도할 수단 필요.
+ipcMain.handle('update:check', async () => {
+  if (process.env.VITE_DEV_SERVER_URL) {
+    return { ok: false, error: '개발 모드에서는 자동 업데이트가 동작하지 않습니다.' }
+  }
+  try {
+    const result = await autoUpdater.checkForUpdates()
+    const current = app.getVersion()
+    const latest = result?.updateInfo?.version
+    return {
+      ok: true,
+      currentVersion: current,
+      latestVersion: latest || null,
+      hasUpdate: latest ? latest !== current : false,
+    }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
   }
 })
 

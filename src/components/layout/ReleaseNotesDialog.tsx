@@ -1,5 +1,14 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { RELEASE_NOTES, type ChangeType, type ReleaseNote } from '@/data/releaseNotes'
+
+type UpdateStatus =
+  | { kind: 'idle' }
+  | { kind: 'checking' }
+  | { kind: 'latest'; version: string }
+  | { kind: 'available'; version: string }
+  | { kind: 'downloading'; version: string; percent: number }
+  | { kind: 'downloaded'; version: string }
+  | { kind: 'error'; message: string }
 
 interface Props {
   open: boolean
@@ -33,11 +42,55 @@ export default function ReleaseNotesDialog({ open, onClose, autoShown = false }:
   const [selectedVersion, setSelectedVersion] = useState<string>(
     () => RELEASE_NOTES[0]?.version ?? currentVersion,
   )
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ kind: 'idle' })
 
   const selected = useMemo(
     () => RELEASE_NOTES.find((r) => r.version === selectedVersion) ?? RELEASE_NOTES[0],
     [selectedVersion],
   )
+
+  // autoUpdater 이벤트 구독 (모달이 열려있는 동안)
+  useEffect(() => {
+    if (!open) return
+    const api = window.electronAPI
+    if (!api?.onUpdateEvent) return
+    const unsub = api.onUpdateEvent((ev) => {
+      if (ev.type === 'available') {
+        setUpdateStatus({ kind: 'available', version: String(ev.payload) })
+      } else if (ev.type === 'progress') {
+        setUpdateStatus((prev) => {
+          const version =
+            prev.kind === 'available' || prev.kind === 'downloading' ? prev.version : '?'
+          return { kind: 'downloading', version, percent: Number(ev.payload) }
+        })
+      } else if (ev.type === 'downloaded') {
+        setUpdateStatus({ kind: 'downloaded', version: String(ev.payload) })
+      } else if (ev.type === 'not-available') {
+        setUpdateStatus({ kind: 'latest', version: String(ev.payload) || currentVersion })
+      } else if (ev.type === 'error') {
+        setUpdateStatus({ kind: 'error', message: String(ev.payload) })
+      }
+    })
+    return unsub
+  }, [open, currentVersion])
+
+  const handleCheckForUpdates = async () => {
+    if (!window.electronAPI?.checkForUpdates) {
+      setUpdateStatus({ kind: 'error', message: '지원하지 않는 환경입니다.' })
+      return
+    }
+    setUpdateStatus({ kind: 'checking' })
+    const result = await window.electronAPI.checkForUpdates()
+    if (!result.ok) {
+      setUpdateStatus({ kind: 'error', message: result.error || '업데이트 확인 실패' })
+      return
+    }
+    // update-available / not-available 이벤트가 상태를 덮어쓰므로 기본값만 설정
+    if (!result.hasUpdate) {
+      setUpdateStatus({ kind: 'latest', version: result.currentVersion || currentVersion })
+    }
+    // hasUpdate=true이면 이벤트 수신으로 downloading → downloaded 진행
+  }
 
   if (!open) return null
 
@@ -121,19 +174,91 @@ export default function ReleaseNotesDialog({ open, onClose, autoShown = false }:
         </div>
 
         {/* 하단 */}
-        <div className="px-5 py-3 border-t flex items-center justify-between flex-shrink-0">
-          <span className="text-xs text-gray-400">
-            새 버전은 백그라운드에서 자동 다운로드됩니다
-          </span>
+        <div className="px-5 py-3 border-t flex items-center justify-between gap-3 flex-shrink-0">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <button
+              onClick={handleCheckForUpdates}
+              disabled={
+                updateStatus.kind === 'checking' ||
+                updateStatus.kind === 'downloading' ||
+                updateStatus.kind === 'downloaded'
+              }
+              className="px-3 py-1.5 text-xs rounded border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed flex items-center gap-1.5 flex-shrink-0"
+            >
+              {updateStatus.kind === 'checking' && (
+                <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+                  <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="4" strokeLinecap="round" className="opacity-75" />
+                </svg>
+              )}
+              업데이트 확인
+            </button>
+            <UpdateStatusText status={updateStatus} />
+          </div>
           <button
             onClick={onClose}
-            className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+            className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 flex-shrink-0"
           >
             확인
           </button>
         </div>
       </div>
     </div>
+  )
+}
+
+function UpdateStatusText({ status }: { status: UpdateStatus }) {
+  if (status.kind === 'idle') {
+    return (
+      <span className="text-xs text-gray-400 truncate">
+        새 버전은 자동으로 다운로드됩니다
+      </span>
+    )
+  }
+  if (status.kind === 'checking') {
+    return <span className="text-xs text-gray-500">확인 중...</span>
+  }
+  if (status.kind === 'latest') {
+    return (
+      <span className="text-xs text-emerald-700">
+        ✓ 최신 버전입니다 (v{status.version})
+      </span>
+    )
+  }
+  if (status.kind === 'available') {
+    return (
+      <span className="text-xs text-blue-700">
+        새 버전 v{status.version} 다운로드 시작...
+      </span>
+    )
+  }
+  if (status.kind === 'downloading') {
+    return (
+      <div className="flex items-center gap-2 min-w-0 flex-1">
+        <span className="text-xs text-blue-700 whitespace-nowrap">
+          v{status.version} 다운로드 중 {status.percent}%
+        </span>
+        <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden max-w-[120px]">
+          <div
+            className="h-full bg-blue-500 transition-all"
+            style={{ width: `${status.percent}%` }}
+          />
+        </div>
+      </div>
+    )
+  }
+  if (status.kind === 'downloaded') {
+    return (
+      <span className="text-xs text-emerald-700">
+        ✓ v{status.version} 다운로드 완료 — 재시작 대기
+      </span>
+    )
+  }
+  // error
+  return (
+    <span className="text-xs text-red-600 truncate" title={status.message}>
+      {status.message}
+    </span>
   )
 }
 

@@ -113,4 +113,38 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('app:getLastSeenVersion') as Promise<{ version: string | null }>,
   setLastSeenVersion: (version: string) =>
     ipcRenderer.invoke('app:setLastSeenVersion', version) as Promise<{ success: boolean; error?: string }>,
+
+  // 수동 업데이트 체크 (v2.3.1~)
+  checkForUpdates: () =>
+    ipcRenderer.invoke('update:check') as Promise<{
+      ok: boolean
+      currentVersion?: string
+      latestVersion?: string | null
+      hasUpdate?: boolean
+      error?: string
+    }>,
+
+  // 업데이트 이벤트 구독 (수동/자동 공통)
+  onUpdateEvent: (callback: (event: {
+    type: 'available' | 'not-available' | 'progress' | 'downloaded' | 'error'
+    payload: string | number
+  }) => void) => {
+    const available = (_e: unknown, v: string) => callback({ type: 'available', payload: v })
+    const notAvailable = (_e: unknown, v: string) => callback({ type: 'not-available', payload: v })
+    const progress = (_e: unknown, p: number) => callback({ type: 'progress', payload: p })
+    const downloaded = (_e: unknown, v: string) => callback({ type: 'downloaded', payload: v })
+    const error = (_e: unknown, m: string) => callback({ type: 'error', payload: m })
+    ipcRenderer.on('update:available', available)
+    ipcRenderer.on('update:not-available', notAvailable)
+    ipcRenderer.on('update:progress', progress)
+    ipcRenderer.on('update:downloaded', downloaded)
+    ipcRenderer.on('update:error', error)
+    return () => {
+      ipcRenderer.removeListener('update:available', available)
+      ipcRenderer.removeListener('update:not-available', notAvailable)
+      ipcRenderer.removeListener('update:progress', progress)
+      ipcRenderer.removeListener('update:downloaded', downloaded)
+      ipcRenderer.removeListener('update:error', error)
+    }
+  },
 })

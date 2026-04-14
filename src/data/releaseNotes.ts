@@ -16,6 +16,20 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: '2.3.1',
+    date: '2026-04-14',
+    title: '수동 업데이트 확인 버튼 추가',
+    highlights: [
+      '릴리즈 노트 모달에 "업데이트 확인" 버튼 추가',
+      '자동 체크 외에도 언제든 수동으로 업데이트를 조회/다운로드 가능',
+    ],
+    changes: [
+      { type: 'feat', text: '수동 업데이트 확인 버튼 — 릴리즈 노트 모달 하단에 추가' },
+      { type: 'feat', text: '업데이트 진행 상태 표시 — 확인 중 / 최신 / 다운로드 진행률 / 완료' },
+      { type: 'fix', text: '자동 업데이트 이벤트 브로드캐스트 보강 (update:not-available, update:downloaded, update:error)' },
+    ],
+  },
+  {
     version: '2.3.0',
     date: '2026-04-14',
     title: '일괄 캡처 + 변환 성능 최적화',
