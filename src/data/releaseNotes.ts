@@ -1,7 +1,7 @@
 // 릴리즈 노트 — 버전별 변경 사항
 // 새 버전 릴리즈 시 이 파일 최상단에 항목 추가 (version은 package.json과 일치해야 함)
 
-export type ChangeType = 'feat' | 'fix' | 'refactor' | 'docs' | 'chore'
+export type ChangeType = 'feat' | 'fix' | 'perf' | 'refactor' | 'docs' | 'chore'
 
 export interface ReleaseNote {
   version: string          // package.json의 version과 일치
@@ -15,6 +15,30 @@ export interface ReleaseNote {
 }
 
 export const RELEASE_NOTES: ReleaseNote[] = [
+  {
+    version: '2.3.0',
+    date: '2026-04-14',
+    title: '일괄 캡처 + 변환 성능 최적화',
+    highlights: [
+      '일괄 캡처 — 여러 영역을 연속으로 캡처 → 한번에 리뷰 → 한번에 변환',
+      '일괄 변환 성능 개선 — 세그먼트 전체를 하나의 Pool에서 동시 처리',
+      'Gemini 병렬 워커 기본값 상향 (4 → 8)',
+    ],
+    changes: [
+      { type: 'feat', text: '일괄 캡처 (Batch Capture) — 캡처 큐 + 일괄 리뷰 모달 + 일괄 변환' },
+      { type: 'feat', text: 'od_convert_many 일괄 변환 명령 — 여러 세그먼트를 단일 IPC로 처리' },
+      { type: 'feat', text: '캡처 드롭다운 (개별/일괄) — 기본값 "일괄 캡처"' },
+      { type: 'feat', text: '일괄 모드에서 OD/Review 기본 ON — 캡처 즉시 감지까지 자동' },
+      { type: 'perf', text: 'Gemini 병렬 워커 기본값 4 → 8 (유료 티어 기준 최적화)' },
+      { type: 'perf', text: '일괄 변환 동적 timeout — 실제 Gemini task 수 기반 계산' },
+      { type: 'fix', text: '일괄 모드 진입 시 state 정규화 — IMG/OD 버튼/실행 경로 일치' },
+      { type: 'fix', text: '일괄 모드 첫 드래그 해상도 저하 회귀 수정' },
+      { type: 'fix', text: '일괄 변환 중 취소/삭제/재시도 차단' },
+      { type: 'fix', text: '일괄 변환 진행 UI — 부정확한 0/N 표시 대신 진행 중 상태로 교체' },
+      { type: 'fix', text: 'OD 패키지 매 실행 시 재다운로드되던 버그 수정' },
+      { type: 'fix', text: '개발 모드 CSP 완화 — HMR 정상 동작' },
+    ],
+  },
   {
     version: '2.2.2',
     date: '2026-04-13',

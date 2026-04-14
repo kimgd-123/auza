@@ -11,6 +11,7 @@ interface Props {
 const TYPE_LABEL: Record<ChangeType, string> = {
   feat: '새 기능',
   fix: '버그 수정',
+  perf: '성능 개선',
   refactor: '리팩토링',
   docs: '문서',
   chore: '기타',
@@ -19,12 +20,13 @@ const TYPE_LABEL: Record<ChangeType, string> = {
 const TYPE_BADGE_CLASS: Record<ChangeType, string> = {
   feat: 'bg-blue-100 text-blue-700 border-blue-200',
   fix: 'bg-amber-100 text-amber-700 border-amber-200',
+  perf: 'bg-emerald-100 text-emerald-700 border-emerald-200',
   refactor: 'bg-purple-100 text-purple-700 border-purple-200',
   docs: 'bg-gray-100 text-gray-700 border-gray-200',
   chore: 'bg-gray-100 text-gray-600 border-gray-200',
 }
 
-const TYPE_ORDER: ChangeType[] = ['feat', 'fix', 'refactor', 'docs', 'chore']
+const TYPE_ORDER: ChangeType[] = ['feat', 'fix', 'perf', 'refactor', 'docs', 'chore']
 
 export default function ReleaseNotesDialog({ open, onClose, autoShown = false }: Props) {
   const currentVersion = __APP_VERSION__
