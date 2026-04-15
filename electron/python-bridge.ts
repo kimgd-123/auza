@@ -27,7 +27,6 @@ type PendingCallback = {
 let pythonProcess: ChildProcess | null = null
 let requestCounter = 0
 const pendingRequests = new Map<string, PendingCallback>()
-let lineBuffer = ''
 
 /** Python 런타임 초기화 promise — 동시 호출 방지 */
 let runtimeReady: Promise<string> | null = null
@@ -96,16 +95,20 @@ function spawnPythonProcess(pythonExe: string): void {
   const pythonDir = path.dirname(pythonExe)
   const envPath = `${pythonDir};${process.env.PATH || ''}`
 
-  pythonProcess = spawn(pythonExe, [scriptPath], {
+  // child 별 closure state — 글로벌 상태로 두면 이전 child 의 늦은 exit/data 가
+  // 다음 child 의 pendingRequests / lineBuffer 를 오염시킬 수 있음.
+  const child = spawn(pythonExe, [scriptPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env, PYTHONIOENCODING: 'utf-8', PATH: envPath },
   })
+  pythonProcess = child
+  let childLineBuffer = ''
 
   // stdout: JSON 응답 수신 (line-delimited)
-  pythonProcess.stdout?.on('data', (data: Buffer) => {
-    lineBuffer += data.toString('utf-8')
-    const lines = lineBuffer.split('\n')
-    lineBuffer = lines.pop() || ''
+  child.stdout?.on('data', (data: Buffer) => {
+    childLineBuffer += data.toString('utf-8')
+    const lines = childLineBuffer.split('\n')
+    childLineBuffer = lines.pop() || ''
 
     for (const line of lines) {
       const trimmed = line.trim()
@@ -126,7 +129,7 @@ function spawnPythonProcess(pythonExe: string): void {
   })
 
   // stderr: 로그 출력 + OD 진행 상황 파싱
-  pythonProcess.stderr?.on('data', (data: Buffer) => {
+  child.stderr?.on('data', (data: Buffer) => {
     const msg = data.toString('utf-8').trim()
     if (!msg) return
 
@@ -150,11 +153,14 @@ function spawnPythonProcess(pythonExe: string): void {
     console.log(`[python] ${msg}`)
   })
 
-  pythonProcess.on('exit', (code) => {
+  child.on('exit', (code) => {
     console.log(`[python-bridge] Process exited with code ${code}`)
+    // 자기 자신이 현재 child 가 아니면(이미 timeout 복구로 교체/초기화됨)
+    // 글로벌 pendingRequests 정리는 건드리지 않는다 — 새 child 의 요청 보호.
+    if (pythonProcess !== child) {
+      return
+    }
     pythonProcess = null
-
-    // 대기 중인 요청 모두 reject
     for (const [id, pending] of pendingRequests) {
       clearTimeout(pending.timer)
       pending.reject(new Error(`Python process exited (code ${code})`))
@@ -162,9 +168,11 @@ function spawnPythonProcess(pythonExe: string): void {
     }
   })
 
-  pythonProcess.on('error', (err) => {
+  child.on('error', (err) => {
     console.error('[python-bridge] Failed to start Python:', err.message)
-    pythonProcess = null
+    if (pythonProcess === child) {
+      pythonProcess = null
+    }
   })
 }
 
@@ -211,6 +219,25 @@ export async function sendPythonCommand(
   return new Promise<PythonResponse>((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingRequests.delete(id)
+      // Python child 가 block 상태일 가능성이 높으므로 강제 종료 → 다음 요청에서
+      // 자동 재시작. 동시에 같은 child 에 묶여 있던 다른 pending 도 즉시 reject 해
+      // 새 child 의 요청과 섞이지 않도록 한다(이전 child 의 늦은 exit 가 새 child
+      // pending 까지 정리하던 race 차단).
+      const dyingChild = pythonProcess
+      if (dyingChild) {
+        console.warn(`[python-bridge] Request ${id} timed out — killing Python child for recovery`)
+        pythonProcess = null
+        for (const [pid, pending] of pendingRequests) {
+          clearTimeout(pending.timer)
+          pending.reject(new Error('Python process killed by timeout recovery'))
+          pendingRequests.delete(pid)
+        }
+        try {
+          dyingChild.kill()
+        } catch (err) {
+          console.error('[python-bridge] Failed to kill Python child:', (err as Error).message)
+        }
+      }
       resolve({ id, success: false, data: null, error: '요청 시간이 초과되었습니다.' })
     }, timeoutMs)
 

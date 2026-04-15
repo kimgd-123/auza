@@ -1,7 +1,16 @@
-# 테스트 인프라 도입 — Deferred Decision
+# 테스트 인프라 도입 — 진행 현황
 
-- 결정일: 2026-04-10 (사용자 승인)
-- 상태: **Deferred — 별도 phase 에서 일괄 진행 예정**
+- 결정일: 2026-04-10 (사용자 승인 — Deferral)
+- 인프라 도입일: 2026-04-15 (Vitest + jsdom + @testing-library/react 설치)
+- 상태: **인프라 도입 완료 — 커버리지 확대는 점진 진행**
+
+## 도입된 인프라 (2026-04-15)
+
+- `vitest`, `@testing-library/react`, `@testing-library/jest-dom`, `jsdom`, `@vitest/coverage-v8` (devDependencies)
+- `vitest.config.ts` — jsdom 환경, `@` alias, `src/test/setup.ts` 로딩
+- `src/test/setup.ts` — `@testing-library/jest-dom/vitest` matcher 등록
+- `package.json` scripts: `test` (watch), `test:run` (단발 실행)
+- 첫 샘플: `src/lib/latex-normalizer.test.ts` — 8 케이스 통과 (인프라 동작 증명)
 
 ## 배경
 
@@ -26,7 +35,7 @@ PRD `doc/PRD_AUZA_HWP작성기.md` 는 프론트엔드 테스트 러너 + 상태
 - `doc/reviews/2026-04-14_084635_od_convert_many/` — Finding 3
   - `05_RESIDUAL_RISK_ACCEPTANCE.md` 참조
 
-## 후속 Phase 착수 시 우선 커버 대상
+## 다음 우선 커버 대상 (인프라 도입 후)
 
 ### Python
 1. `convert_regions_many` — 결과 순서, whole-image fallback, figure 혼합, partial failure
@@ -40,5 +49,5 @@ PRD `doc/PRD_AUZA_HWP작성기.md` 는 프론트엔드 테스트 러너 + 상태
 
 ## 착수 조건
 
-- 현재 진행 중 v2.3.x 릴리즈 스트림이 안정화된 이후
-- 또는 PRD 수정을 통해 테스트 요구사항을 현실화하는 쪽으로 결정된 경우
+- 인프라 자체는 도입 완료 (2026-04-15)
+- 위 우선 대상 테스트는 해당 영역을 다음에 만질 때 함께 작성하는 것을 기본으로 함
