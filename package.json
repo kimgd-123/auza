@@ -1,6 +1,6 @@
 {
   "name": "auza",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "AUZA — PDF-to-Document 스마트 작성기",
   "main": "dist-electron/main.js",
   "scripts": {

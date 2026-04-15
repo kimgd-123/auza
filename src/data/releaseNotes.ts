@@ -16,6 +16,21 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: '2.3.2',
+    date: '2026-04-15',
+    title: '안정성 개선 + 내부 테스트 인프라 도입',
+    highlights: [
+      '대용량 일괄 변환에서 timeout 발생 시 Python 자동 복구 — 앱 재시작 불필요',
+      'HWP 변환 시 블록 제목("캡처 p.N")이 본문에 삽입되던 문제 수정',
+    ],
+    changes: [
+      { type: 'fix', text: 'HWP 변환 시 블록 제목이 본문에 삽입되던 문제 수정 — 제목은 UI 레이블로만 사용' },
+      { type: 'fix', text: 'Python 변환 timeout 시 자식 프로세스 자동 종료 + 다음 요청에서 자동 재시작 (앱 재시작 불필요)' },
+      { type: 'fix', text: 'timeout 복구 race 차단 — 이전 child 의 늦은 exit 가 새 child 요청을 정리하지 않도록 격리' },
+      { type: 'chore', text: 'Vitest + jsdom + @testing-library/react 테스트 인프라 도입 (devDependency, 사용자 비가시)' },
+    ],
+  },
+  {
     version: '2.3.1',
     date: '2026-04-14',
     title: '수동 업데이트 확인 버튼 추가',
