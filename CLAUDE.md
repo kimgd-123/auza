@@ -25,7 +25,8 @@ React Renderer (UI) ↔ IPC ↔ Electron Main ↔ child_process (stdin/stdout JS
 - **Batch 모드 state 정규화**: AreaCapture batchMode=true 시 useEffect 로 imgCropMode=false, odEnabled=true 강제. drag handler 는 batch 분기를 IMG 크롭보다 먼저 실행. 버튼 표시도 batch 에서 raw state 대신 정규화된 값 노출
 - **batch 동적 timeout**: `base(5분) + ceil(tasks/effectiveWorkers) × 180초`, `legacyFloor(3분 + 세그먼트×2분)` 를 minimum 으로 보장, 상한 60분. `AUZA_GEMINI_PARALLEL_DISABLE=1` 이면 effectiveWorkers=1 로 정렬
 - **batch 진행률 UI**: 단일 IPC 구조상 per-segment 중간 상태가 없음 → 큐 표시는 indeterminate (`변환 중... (N개)`)
-- **Residual Risk**: timeout 발생 시 Python child 복구 경로 미구현 (별도 phase), 프론트엔드 테스트 인프라 부재 (`doc/DEFERRED_TEST_INFRA.md`)
+- **Timeout 자동 복구 (v2.3.2~)**: `electron/python-bridge.ts` 에서 요청 timeout 시 Python child 강제 종료 → 다음 요청에서 자동 재시작. child generation 격리(closure-scoped lineBuffer + exit 핸들러 self-check + timeout 시점 즉시 pending reject)로 이전 child 의 늦은 exit race 차단.
+- **테스트 인프라 (v2.3.2~)**: Vitest + jsdom + @testing-library/react 도입. `vitest.config.ts` 는 vite.config.ts 와 별도 (electron plugin 충돌 회피) + `define.__APP_VERSION__` 동기화. 컴포넌트/훅 커버리지는 점진 확대 (`doc/DEFERRED_TEST_INFRA.md`)
 - **부분 성공**: 프런트엔드는 `html`이 있으면 삽입 진행, `error`는 비차단 경고 (console.warn)
 - **Python 패키지**: 시작 시 bs4/pywin32/Pillow/google-genai 자동 체크 + pip install (테스터 PC 대응)
 - **OD 패키지 설치**: embed Python은 `--target <od-dir> --upgrade`, system Python은 `--force-reinstall` (v2.3.0 수정 — `--force-reinstall` + `--target` 조합은 잔재 디렉토리에서 불완전 설치 유발)
