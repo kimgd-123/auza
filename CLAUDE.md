@@ -63,9 +63,9 @@ React Renderer (UI) ↔ IPC ↔ Electron Main ↔ child_process (stdin/stdout JS
 - **교차검토 파이프라인**: `doc/CLAUDE_CODEX_교차검토_파이프라인.md`
 - **자동화 스크립트**: `scripts/New-PhaseReviewBundle.ps1`, `scripts/Start-CodexCrossCheckJob.ps1`, `scripts/Get-CodexCrossCheckStatus.ps1`
 - **대기 스크립트**: `scripts/Wait-CodexCrossCheck.ps1`
-- **한글 오토메이션 문서**: `C:\Users\kaeli\Downloads\docling_pj\HANCOM개발가이드문서\`
-- **Paser_Exam_pj** (`C:\Project\Paser_Exam_pj`): 수식 파이프라인 포팅 (latex-normalizer, latex-to-hwp, fix_equation_width)
-- **docling_pj** (`C:\Users\kaeli\Downloads\docling_pj`): PDF 좌표/JSON 중간구조/오프스크린 렌더링 설계 참조
+- **한글 오토메이션 문서**: 한컴오피스 개발 가이드 문서 (로컬 참조)
+- **Paser_Exam_pj** (로컬 참조): 수식 파이프라인 포팅 (latex-normalizer, latex-to-hwp, fix_equation_width)
+- **docling_pj** (로컬 참조): PDF 좌표/JSON 중간구조/오프스크린 렌더링 설계 참조
 - **Gemini API 키**: `.env.local` (개발) / `%APPDATA%/AUZA-v2/config.json` (배포) — `.env.local`은 exe 패키징 제외
 - **Python 의존성**: `python/requirements.txt` (beautifulsoup4, pywin32, Pillow, PyMuPDF, google-genai)
 - **Gemini SDK**: `google-genai>=0.8` (신규 SDK, `google-generativeai`는 EOL)
