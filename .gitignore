@@ -23,6 +23,9 @@ package-lock.json
 doc/reviews/
 doc/CLAUDE_CODEX_*.md
 
+# Claude Code 작업 지시문 (로컬 전용 — 절대경로/내부 워크플로우 포함 가능)
+CLAUDE.md
+
 # 임시/스크래치 파일
 _recheck_tmp/
 _recheck_tmp_cache/
