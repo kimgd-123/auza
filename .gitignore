@@ -18,3 +18,18 @@ python-embed-old/
 *.status.json
 package-lock.json
 .claude/
+
+# 내부 리뷰/QA 파이프라인 산출물 (public 노출 금지)
+doc/reviews/
+doc/CLAUDE_CODEX_*.md
+
+# 임시/스크래치 파일
+_recheck_tmp/
+_recheck_tmp_cache/
+codex_plan*.txt
+codex_review.txt
+codex_*.log
+
+# Windows 예약어 (실수로 생성되는 경우)
+CON
+
