@@ -6,7 +6,7 @@ figure 영역은 PDF 원본 이미지를 우선 사용 (PyMuPDF)
 Phase B: Gemini 호출 부분 병렬화 (ThreadPoolExecutor)
 - figure/PyMuPDF 후처리는 메인 스레드 순차 유지
 - AUZA_GEMINI_PARALLEL_DISABLE=1 → 순차 fallback
-- AUZA_GEMINI_PARALLEL=N (1~10) → 워커 수 조절 (기본 4)
+- AUZA_GEMINI_PARALLEL=N (1~10) → 워커 수 조절 (기본 8, v2.3.0~)
 """
 
 import os
