@@ -50,7 +50,8 @@ export default function ChatPanel() {
     setInput('')
     setLoadingBlockId(sendBlockId)
 
-    // 일반 채팅은 Summary Layer만 전송 (비용 최적화 — PRD §13.4.3)
+    // 채팅도 풀 컨텍스트 전송 (Summary + 선택 블록 풀 MD)
+    // — Summary 만 보내면 Gemini 가 본문/수식을 못 받아 정답 추론 불가 (v2.3.3)
     let context: string | undefined
     const { blocks: allBlocks, selectedBlockIds } = useAppStore.getState()
     const blockIdSet = new Set(allBlocks.map((b) => b.id))
@@ -59,8 +60,8 @@ export default function ChatPanel() {
       ? validSelected
       : sendBlockId ? new Set([sendBlockId]) : new Set<string>()
     const ctxResult = buildContext(allBlocks, effectiveIds)
-    if (ctxResult.summaryOnly) {
-      context = ctxResult.summaryOnly
+    if (ctxResult.text) {
+      context = ctxResult.text
     }
 
     // 채팅 히스토리를 Gemini 형식으로 변환

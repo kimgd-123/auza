@@ -16,6 +16,19 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: '2.3.3',
+    date: '2026-05-18',
+    title: '채팅 컨텍스트 개선 + HWP 화살표 수식 보완',
+    highlights: [
+      'Gemini 채팅이 선택 블록의 본문/수식 전체를 받도록 변경 — 문항을 끝까지 인식',
+      'HWP 변환 시 \\Longrightarrow / \\Longleftrightarrow 등 긴 화살표 정상 렌더링',
+    ],
+    changes: [
+      { type: 'fix', text: '채팅이 블록 1줄 요약만 받던 문제 수정 — 선택 블록의 풀 컨텍스트(텍스트 + LaTeX 수식)를 Gemini 에 전송' },
+      { type: 'fix', text: 'LaTeX \\Longrightarrow / \\Longleftarrow / \\Longleftrightarrow → HWP 매핑 추가 (긴 화살표가 텍스트로 깨지던 현상 해소)' },
+    ],
+  },
+  {
     version: '2.3.2',
     date: '2026-04-15',
     title: '안정성 개선 + 내부 테스트 인프라 도입',

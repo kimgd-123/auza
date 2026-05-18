@@ -38,6 +38,7 @@ export const SYMBOL_MAP: Record<string, string> = {
   '\\updownarrow': 'udarrow', '\\Uparrow': 'duparrow', '\\Downarrow': 'ddownarrow',
   '\\mapsto': 'mapsto', '\\longmapsto': 'mapsto',
   '\\longrightarrow': 'rarrow', '\\longleftarrow': 'larrow',
+  '\\Longrightarrow': 'drarrow', '\\Longleftarrow': 'dlarrow', '\\Longleftrightarrow': 'dlrarrow',
 
   // 기타 기호
   '\\infty': 'inf', '\\partial': 'partial', '\\nabla': 'nabla',
