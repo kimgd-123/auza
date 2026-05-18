@@ -855,7 +855,7 @@ auza_pj/
 | `table` (단순) | GFM 테이블 `\| A \| B \|` | 셀 병합 없는 경우만 |
 | `table` (병합/배경색) | HTML `<table>` 블록 삽입 | GFM은 병합 셀 표현 불가 |
 | `math` ($...$, $$...$$) | 그대로 유지 | MD에서 LaTeX 호환 |
-| `image` | `[asset:IMG_001] 핵반응 다이어그램` | **base64 금지** — Asset ID 참조 |
+| `image` | 자산 등록: `[asset:IMG_001] alt` / 미등록 fallback: `[이미지] alt` 또는 `![alt](url)` | **base64 본문 금지** — 모두 placeholder 만, 토큰 의미는 시스템 프롬프트에서 안내 (v2.3.3~) |
 | `bulletList` / `orderedList` | `- item` / `1. item` | 표준 Markdown |
 
 > ⚠️ MD는 LLM 입력용 **읽기 전용 뷰**이다. 원본 저장 포맷(ProseMirror JSON)을 교체하지 않는다.
@@ -877,7 +877,7 @@ interface Asset {
 ```
 
 - 캡처 시 이미지 → Asset Store에 자동 등록
-- MD 변환 시 `[asset:IMG_001] alt text`로 참조
+- MD 변환 시 자산 등록 이미지는 `[asset:IMG_001] alt text` 로 참조. 일반 에디터 입력/붙여넣기 등 자산 미등록 이미지는 `[이미지] alt` 또는 `![alt](url)` 로 fallback 직렬화 (v2.3.3~) — 시스템 프롬프트에서 세 토큰 모두 이미지 의미로 안내
 - Gemini generation 결과에서 `{"type": "image", "ref": "IMG_001"}`로 재사용
 
 #### 13.4.3 2계층 컨텍스트 (토큰 비용 최적화)
@@ -887,7 +887,7 @@ interface Asset {
 | 계층 | 내용 | 전송 조건 |
 |------|------|----------|
 | **Summary** (항상 전송) | 각 블록의 1줄 요약 + 포함 요소 태그 | 모든 Gemini 호출 |
-| **Full Content** (선택적) | 사용자가 선택한 블록의 전체 MD | 생성 요청 시만 |
+| **Full Content** (선택적) | 사용자가 선택한 블록의 전체 MD | 생성 요청 + 채팅 호출 시 (v2.3.3~) |
 
 ```markdown
 # 블록 요약 (Summary Layer)
