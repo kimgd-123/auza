@@ -2,7 +2,7 @@
  * 2계층 컨텍스트 빌더
  *
  * - Summary Layer: 각 블록의 1줄 요약 + 요소 태그 (항상 전송)
- * - Full Content Layer: 선택 블록의 전체 MD (생성 요청 시만)
+ * - Full Content Layer: 선택 블록의 전체 MD (생성 요청 + 채팅 호출 시, v2.3.3~)
  */
 
 import type { EditorBlock } from '@/types'
