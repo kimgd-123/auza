@@ -31,14 +31,18 @@ export const SYMBOL_MAP: Record<string, string> = {
   '\\subset': 'subset', '\\supset': 'supset', '\\subseteq': 'subseteq', '\\supseteq': 'supseteq',
   '\\in': 'in', '\\ni': 'ni', '\\notin': 'notin', '\\perp': 'perp', '\\parallel': 'parallel',
 
-  // 화살표
-  '\\rightarrow': 'rarrow', '\\to': 'rarrow', '\\leftarrow': 'larrow', '\\gets': 'larrow',
-  '\\leftrightarrow': 'lrarrow', '\\Rightarrow': 'drarrow', '\\Leftarrow': 'dlarrow',
-  '\\Leftrightarrow': 'dlrarrow', '\\uparrow': 'uparrow', '\\downarrow': 'downarrow',
-  '\\updownarrow': 'udarrow', '\\Uparrow': 'duparrow', '\\Downarrow': 'ddownarrow',
-  '\\mapsto': 'mapsto', '\\longmapsto': 'mapsto',
-  '\\longrightarrow': 'rarrow', '\\longleftarrow': 'larrow',
-  '\\Longrightarrow': 'drarrow', '\\Longleftarrow': 'dlarrow', '\\Longleftrightarrow': 'dlrarrow',
+  // 화살표 — HWP 수식 편집기 (HYhwpEQ) 공식 키워드: RARROW/LARROW/LRARROW/UPARROW/DOWNARROW/UDARROW
+  // v2.4.0 핫픽스: 기존 drarrow/dlarrow/dlrarrow/uparrow 등은 HWP 가 인식하지 못해
+  // 텍스트로 출력되던 결함을 정정. HWP 는 single/double 화살표를 별도 키워드로 구분하지 않으므로
+  // \rightarrow(→)와 \Rightarrow(⟹) 모두 RARROW 로 매핑 (HWP 가 ⟹ 한 종류로 렌더링).
+  '\\rightarrow': 'RARROW', '\\to': 'RARROW', '\\leftarrow': 'LARROW', '\\gets': 'LARROW',
+  '\\leftrightarrow': 'LRARROW', '\\Rightarrow': 'RARROW', '\\Leftarrow': 'LARROW',
+  '\\Leftrightarrow': 'LRARROW', '\\uparrow': 'UPARROW', '\\downarrow': 'DOWNARROW',
+  '\\updownarrow': 'UDARROW', '\\Uparrow': 'UPARROW', '\\Downarrow': 'DOWNARROW',
+  '\\Updownarrow': 'UDARROW',
+  '\\mapsto': 'RARROW', '\\longmapsto': 'RARROW',
+  '\\longrightarrow': 'RARROW', '\\longleftarrow': 'LARROW', '\\longleftrightarrow': 'LRARROW',
+  '\\Longrightarrow': 'RARROW', '\\Longleftarrow': 'LARROW', '\\Longleftrightarrow': 'LRARROW',
 
   // 기타 기호
   '\\infty': 'inf', '\\partial': 'partial', '\\nabla': 'nabla',

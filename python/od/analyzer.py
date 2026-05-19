@@ -14,12 +14,106 @@ import sys
 import io
 import re
 import json
+import time
 import base64
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .constants import MIN_OD_SIZE
 from .detector import detect_regions_from_image, crop_region_from_image, sort_regions_reading_order, reclassify_boxed_text
 from .gemini_vision import call_gemini_vision, get_prompt_for_region, PROMPT_FIGURE_CHECK
+
+
+# ── 다중 Gemini API 키 풀 (v2.4.0) ──
+
+class KeyPool:
+    """다중 Gemini API 키 풀 — 라운드로빈 + 429 cooldown 관리
+
+    Args:
+        keys: API 키 리스트 (중복 제거 권장)
+        cooldown_sec: 429 받은 키를 풀에서 일시 제외할 시간(초)
+    """
+
+    def __init__(self, keys: list, cooldown_sec: int = 60):
+        # 빈 문자열 / 중복 제거
+        seen = set()
+        deduped = []
+        for k in keys:
+            if isinstance(k, str) and k.strip() and k not in seen:
+                deduped.append(k.strip())
+                seen.add(k)
+        if not deduped:
+            raise ValueError("KeyPool: 키 리스트가 비어있습니다")
+        self._lock = threading.Lock()
+        self._keys = deduped
+        self._cooldown_until = {k: 0.0 for k in deduped}
+        self._rr_counter = 0
+        self._cooldown_sec = cooldown_sec
+
+    def acquire(self, exclude=None):
+        """활성(cooldown 아님) + exclude 에 없는 키 1개를 라운드로빈 순서로 반환.
+
+        없으면 None. Thread-safe.
+        """
+        now = time.monotonic()
+        exclude_set = set(exclude) if exclude else set()
+        with self._lock:
+            n = len(self._keys)
+            for _ in range(n):
+                idx = self._rr_counter % n
+                self._rr_counter += 1
+                key = self._keys[idx]
+                if key in exclude_set:
+                    continue
+                if self._cooldown_until[key] <= now:
+                    return key
+            return None
+
+    def mark_cooldown(self, key: str):
+        """해당 키를 cooldown_sec 초 동안 풀에서 제외."""
+        with self._lock:
+            self._cooldown_until[key] = time.monotonic() + self._cooldown_sec
+
+    def active_count(self) -> int:
+        now = time.monotonic()
+        with self._lock:
+            return sum(1 for k in self._keys if self._cooldown_until[k] <= now)
+
+    def total_count(self) -> int:
+        return len(self._keys)
+
+
+def _call_vision_with_pool(key_pool: KeyPool, crop_b64: str, prompt: str) -> str:
+    """KeyPool 라운드로빈으로 키를 받아 call_gemini_vision 호출.
+
+    429 (GeminiRetryExhaustedError with status_code==429) 발생 시
+    해당 키를 cooldown 등록하고 다른 키로 즉시 재시도. 같은 task 는 각 키에
+    최대 1회 시도 → 모든 키 cooldown 이면 마지막 에러 raise.
+    """
+    from .vision_client import GeminiRetryExhaustedError, GeminiPermanentError
+
+    tried = set()
+    last_error = None
+    while True:
+        key = key_pool.acquire(exclude=tried)
+        if key is None:
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError("사용 가능한 API 키가 없습니다 (모두 cooldown)")
+        try:
+            return call_gemini_vision(key, crop_b64, prompt)
+        except GeminiRetryExhaustedError as e:
+            if getattr(e, 'status_code', 0) == 429:
+                key_pool.mark_cooldown(key)
+                tried.add(key)
+                last_error = e
+                sys.stderr.write(
+                    f"[od-analyzer] key cooldown (429) — 활성 키 {key_pool.active_count()}/{key_pool.total_count()} 남음\n"
+                )
+                continue
+            raise
+        except GeminiPermanentError:
+            # 400/401 은 키 자체 문제 → 다른 키로 재시도해도 의미 없음. 그대로 raise.
+            raise
 
 
 def _emit_progress(step: str, current: int = 0, total: int = 0, detail: str = "",
@@ -371,19 +465,28 @@ def convert_regions(image_base64: str, detections: list, api_key: str,
     }
 
 
-def convert_regions_many(segments: list, api_key: str) -> dict:
+def convert_regions_many(segments: list, api_keys) -> dict:
     """여러 세그먼트를 한 번에 변환 — 모든 세그먼트의 Gemini 호출을
-    단일 ThreadPoolExecutor에서 병렬 처리하여 전체 소요 시간 단축.
+    다중 키 풀(KeyPool) 위 ThreadPoolExecutor에서 병렬 처리.
 
     Args:
         segments: [{imageBase64, detections, pdfPath?, pageNum?, captureBboxNorm?}, ...]
-        api_key: Gemini API 키
+        api_keys: API 키 리스트 (list[str]) 또는 단일 키 (str, 하위호환)
 
     Returns:
         {"results": [{html, regions, error}, ...], "error": None}
         results는 segments와 동일 순서/길이.
+
+    v2.4.0: workers = len(api_keys) × _get_parallel_workers().
+        키별 라운드로빈 + 429 발생 시 해당 키 60초 cooldown → 같은 task 다른 키 재시도.
     """
     from PIL import Image
+
+    # 하위호환: 단일 키 문자열 입력도 허용
+    if isinstance(api_keys, str):
+        api_keys = [api_keys]
+    if not isinstance(api_keys, list) or not api_keys:
+        return {"results": [], "error": "api_keys 가 필요합니다"}
 
     if not segments:
         return {"results": [], "error": None}
@@ -476,15 +579,21 @@ def convert_regions_many(segments: list, api_key: str) -> dict:
         })
 
     # ────────────────────────────────────────────
-    # Phase 2: 전체 Gemini 호출을 단일 Pool에서 병렬 실행
-    # (워커 수는 세그먼트 수와 무관하게 _get_parallel_workers() 상한 유지 — rate limit 보호)
+    # Phase 2: 다중 키 풀에서 ThreadPoolExecutor 병렬 실행
+    # v2.4.0: max_workers = activeKeys × _get_parallel_workers()
+    # 라운드로빈은 워커 실행 시점에 KeyPool.acquire() — 동적 분배
     # ────────────────────────────────────────────
-    workers = _get_parallel_workers()
+    workers_per_key = _get_parallel_workers()
+    key_pool = KeyPool(api_keys, cooldown_sec=60)
+    workers = max(1, key_pool.total_count() * workers_per_key) if workers_per_key > 0 else 1
     total_gemini = len(flat_gemini_tasks)
-    use_parallel = workers > 0 and total_gemini > 1
+    use_parallel = workers_per_key > 0 and total_gemini > 1
 
-    sys.stderr.write(f"[od-analyzer] convert_many: Gemini 호출 {total_gemini}건 "
-                     f"(parallel={use_parallel}, workers={workers})\n")
+    sys.stderr.write(
+        f"[od-analyzer] convert_many: Gemini 호출 {total_gemini}건 "
+        f"(keys={key_pool.total_count()}, workersPerKey={workers_per_key}, "
+        f"total_workers={workers}, parallel={use_parallel})\n"
+    )
 
     progress_lock = threading.Lock()
     progress_counter = [0]
@@ -502,7 +611,7 @@ def convert_regions_many(segments: list, api_key: str) -> dict:
             future_map = {}
             for seg_idx, task in flat_gemini_tasks:
                 future = executor.submit(
-                    call_gemini_vision, api_key, task["crop_b64"], task["prompt"]
+                    _call_vision_with_pool, key_pool, task["crop_b64"], task["prompt"]
                 )
                 future_map[future] = (seg_idx, task)
 
@@ -519,8 +628,8 @@ def convert_regions_many(segments: list, api_key: str) -> dict:
         for seg_idx, task in flat_gemini_tasks:
             region = task["det"]["region"]
             try:
-                task["gemini_result"] = call_gemini_vision(
-                    api_key, task["crop_b64"], task["prompt"]
+                task["gemini_result"] = _call_vision_with_pool(
+                    key_pool, task["crop_b64"], task["prompt"]
                 )
             except Exception as e:
                 task["gemini_error"] = e

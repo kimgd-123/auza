@@ -5,6 +5,30 @@ export interface HwpWritePayload {
   mathMappings: Record<string, string>
 }
 
+// Gemini API 키 항목 (v2.4.0 다중 키)
+export interface ApiKeyEntry {
+  key: string
+  label: string
+  disabled?: boolean
+  // Codex F3: 출처 표시 — 'env' 인 키는 SettingsDialog 에서 read-only (별칭/비활성/삭제 불가)
+  source?: 'env' | 'config'
+}
+
+// 2단 자동 캡처용 정규화 사각형 (페이지 비율 0~1, v2.4.0)
+export interface NormRect {
+  x: number  // 0~1
+  y: number  // 0~1
+  w: number  // 0~1
+  h: number  // 0~1
+}
+
+export interface TwoColumnRegions {
+  col1: NormRect
+  col2: NormRect
+}
+
+export type TwoColumnStep = 'col1' | 'col2' | 'ready'
+
 export interface HwpWriteResult {
   success: boolean
   data: unknown
@@ -42,9 +66,14 @@ export interface ElectronAPI {
     assets: Record<string, string>
   }) => Promise<{ success: boolean; data: unknown; error: string | null }>
 
-  // Gemini API 키 설정
+  // Gemini API 키 설정 — 단일 키 (하위호환, 첫 활성 키 반환)
   getApiKey: () => Promise<{ key: string; hasKey: boolean }>
   saveApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
+
+  // Gemini API 키 — 다중 키 (v2.4.0)
+  getApiKeys: () => Promise<{ keys: ApiKeyEntry[] }>
+  saveApiKeys: (keys: ApiKeyEntry[]) => Promise<{ success: boolean; error?: string }>
+  testApiKey: (apiKey: string) => Promise<{ ok: boolean; error?: string }>
 
   // 세션 복구 시 PDF allowlist 등록
   allowPdf: (filePath: string) => Promise<{ success: boolean; error?: string; canonicalPath?: string | null }>

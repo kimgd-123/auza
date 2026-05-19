@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ChatMessage, EditorBlock, PanelSizes, SavedOdData, BatchCaptureState, BatchCaptureSegment } from '@/types'
+import type { ChatMessage, EditorBlock, PanelSizes, SavedOdData, BatchCaptureState, BatchCaptureSegment, TwoColumnRegions, TwoColumnStep } from '@/types'
 import type { LayoutMode } from '@/components/layout/LayoutPicker'
 
 interface AppState {
@@ -98,6 +98,17 @@ interface AppState {
   // 캡처 모드 (개별/일괄)
   batchMode: boolean
   setBatchMode: (batch: boolean) => void
+
+  // 2단 자동 캡처 모드 (v2.4.0)
+  twoColumnMode: boolean
+  twoColumnRegions: TwoColumnRegions | null
+  twoColumnStep: TwoColumnStep
+  twoColumnRunning: boolean
+  setTwoColumnMode: (enabled: boolean) => void
+  setTwoColumnRegion: (which: 'col1' | 'col2', rect: import('@/types').NormRect) => void
+  setTwoColumnStep: (step: TwoColumnStep) => void
+  setTwoColumnRunning: (running: boolean) => void
+  resetTwoColumn: () => void
 
   // 릴리즈 노트 모달 (단일 source of truth)
   releaseNotesOpen: boolean
@@ -344,6 +355,42 @@ export const useAppStore = create<AppState>((set, get) => ({
   // 캡처 모드 (기본: 일괄)
   batchMode: true,
   setBatchMode: (batch) => set({ batchMode: batch }),
+
+  // 2단 자동 캡처 모드 (v2.4.0)
+  twoColumnMode: false,
+  twoColumnRegions: null,
+  twoColumnStep: 'col1',
+  twoColumnRunning: false,
+  setTwoColumnMode: (enabled) =>
+    set((state) =>
+      enabled
+        ? {
+            twoColumnMode: true,
+            // 모드 진입 시 일괄/개별 캡처와 상호 배타
+            batchMode: false,
+            // 가이드 1단계부터 다시 시작
+            twoColumnStep: 'col1',
+            twoColumnRegions: null,
+          }
+        : { twoColumnMode: false, twoColumnRunning: false },
+    ),
+  setTwoColumnRegion: (which, rect) =>
+    set((state) => {
+      const prev = state.twoColumnRegions
+      const next: TwoColumnRegions = {
+        col1: which === 'col1' ? rect : (prev?.col1 || { x: 0, y: 0, w: 0, h: 0 }),
+        col2: which === 'col2' ? rect : (prev?.col2 || { x: 0, y: 0, w: 0, h: 0 }),
+      }
+      // col1 입력 후 col2 단계로 자동 이동, col2 입력 후 ready
+      let nextStep: TwoColumnStep = state.twoColumnStep
+      if (which === 'col1' && state.twoColumnStep === 'col1') nextStep = 'col2'
+      else if (which === 'col2' && state.twoColumnStep === 'col2') nextStep = 'ready'
+      return { twoColumnRegions: next, twoColumnStep: nextStep }
+    }),
+  setTwoColumnStep: (step) => set({ twoColumnStep: step }),
+  setTwoColumnRunning: (running) => set({ twoColumnRunning: running }),
+  resetTwoColumn: () =>
+    set({ twoColumnRegions: null, twoColumnStep: 'col1', twoColumnRunning: false }),
 
   // 릴리즈 노트 모달
   releaseNotesOpen: false,

@@ -23,17 +23,29 @@ export default function BatchReviewModal() {
       )
   }, [batchCaptureState])
 
-  // 리뷰 가능한 세그먼트가 없으면 자동 변환
+  // Codex F2: 진행 중(detecting/capturing) 세그먼트 수 — 0 보다 크면 아직 준비 안 됨
+  const pendingDetectCount = useMemo(() => {
+    if (!batchCaptureState) return 0
+    return batchCaptureState.segments.filter(
+      (seg) => seg.status === 'detecting' || seg.status === 'capturing',
+    ).length
+  }, [batchCaptureState])
+
+  // 리뷰 가능한 세그먼트가 없으면 자동 변환 — 단, detect 가 아직 진행 중이면 대기
+  // v2.4.0 (Codex F2): 2단 자동 캡처는 fire-and-forget 으로 큐잉하므로 reviewing 진입 시점에
+  // detect 가 미완일 수 있음. detecting 이 모두 끝난 뒤에만 zero-tab auto-convert 트리거.
   useEffect(() => {
     if (!batchCaptureState || batchCaptureState.status !== 'reviewing') return
+    if (pendingDetectCount > 0) return
     if (tabSegments.length === 0 && !autoConvertFired.current) {
       autoConvertFired.current = true
       batchConvertAndInsert()
     }
-  }, [batchCaptureState, tabSegments.length, batchConvertAndInsert])
+  }, [batchCaptureState, tabSegments.length, pendingDetectCount, batchConvertAndInsert])
 
   if (!batchCaptureState || batchCaptureState.status !== 'reviewing') return null
-  if (tabSegments.length === 0) return null
+  // detect 진행 중이면 모달 자체는 띄우고 진행률 안내
+  if (tabSegments.length === 0 && pendingDetectCount === 0) return null
 
   const currentTab = tabSegments[Math.min(activeTab, tabSegments.length - 1)]
   if (!currentTab) return null
@@ -54,11 +66,21 @@ export default function BatchReviewModal() {
       setActiveTab(activeTab + 1)
     } else {
       // 모든 탭 리뷰 완료 → 변환 실행
+      // Codex F2 잔여 안전망: 아직 detecting/capturing 중인 세그먼트가 있으면 변환 차단
+      if (pendingDetectCount > 0) {
+        alert(`아직 검출 중인 ${pendingDetectCount}개 영역이 있습니다. 완료 후 다시 시도해주세요.`)
+        return
+      }
       batchConvertAndInsert()
     }
   }
 
   const handleSkipAll = () => {
+    // Codex F2 잔여 안전망: detecting/capturing 중인 세그먼트가 있으면 변환 차단
+    if (pendingDetectCount > 0) {
+      alert(`아직 검출 중인 ${pendingDetectCount}개 영역이 있습니다. 완료 후 다시 시도해주세요.`)
+      return
+    }
     // 현재 탭의 편집 상태 저장
     if (currentDetsRef.current && seg.id) {
       updateBatchSegment(seg.id, { detections: currentDetsRef.current, status: 'reviewed' })

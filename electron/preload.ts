@@ -78,11 +78,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   allowPdf: (filePath: string) =>
     ipcRenderer.invoke('session:allowPdf', filePath) as Promise<{ success: boolean; error?: string }>,
 
-  // Gemini API 키 설정
+  // Gemini API 키 설정 — 단일 키 (하위호환, 첫 활성 키)
   getApiKey: () =>
     ipcRenderer.invoke('config:getApiKey') as Promise<{ key: string; hasKey: boolean }>,
   saveApiKey: (apiKey: string) =>
     ipcRenderer.invoke('config:saveApiKey', apiKey) as Promise<{ success: boolean; error?: string }>,
+
+  // Gemini API 키 — 다중 키 (v2.4.0)
+  getApiKeys: () =>
+    ipcRenderer.invoke('config:getApiKeys') as Promise<{
+      keys: Array<{ key: string; label: string; disabled?: boolean }>
+    }>,
+  saveApiKeys: (keys: Array<{ key: string; label: string; disabled?: boolean }>) =>
+    ipcRenderer.invoke('config:saveApiKeys', keys) as Promise<{ success: boolean; error?: string }>,
+  testApiKey: (apiKey: string) =>
+    ipcRenderer.invoke('config:testApiKey', apiKey) as Promise<{ ok: boolean; error?: string }>,
 
   // OD 진행 상황 수신
   onOdProgress: (callback: (progress: { step: string; current: number; total: number; detail: string }) => void) => {

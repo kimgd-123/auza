@@ -16,6 +16,26 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: '2.4.0',
+    date: '2026-05-19',
+    title: '2단 PDF 자동 캡처 + 다중 Gemini API 키',
+    highlights: [
+      '2단 구성 시험지 PDF를 한 번에 일괄 캡처 — 1페이지에서 1단/2단 영역 한 번만 지정',
+      '여러 Gemini API 키를 등록해 키별 워커 풀로 병렬 호출 (대용량 작업 시 quota 분산)',
+      '429(quota 초과) 자동 처리 — 해당 키 60초 cooldown 후 다른 키로 자동 재시도',
+    ],
+    changes: [
+      { type: 'feat', text: '2단 자동 캡처 모드 — 캡처 드롭다운에 신규 추가. 1페이지에서 1단/2단 영역을 한 번 드래그하면 전체 페이지에 자동 적용' },
+      { type: 'feat', text: '다중 Gemini API 키 — 설정 다이얼로그에서 별칭과 함께 여러 키 등록 가능, 각 키마다 유효성 테스트 버튼 제공' },
+      { type: 'feat', text: '키별 독립 워커 풀 — N개 키 × 8 워커로 동시 호출. AUZA_GEMINI_PARALLEL 환경변수는 키당 워커 수로 재해석' },
+      { type: 'feat', text: '429 자동 cooldown — quota 초과 키는 60초간 풀에서 제외, 같은 task 는 즉시 다른 활성 키로 재시도' },
+      { type: 'fix', text: 'OD boxed_text 재분류를 bg_mean 단일 판정으로 단순화 — tight crop 의 글자 픽셀이 가장자리 strip 에 잡혀 발생하던 false positive 감소' },
+      { type: 'fix', text: 'HWP 수식 화살표(⇒/⇐/⇔ 등) 변환 깨짐 해소 — drarrow/dlarrow 같은 미존재 키워드를 HWP 수식 편집기 실제 키워드(RARROW/LARROW/LRARROW/UPARROW/DOWNARROW/UDARROW)로 정정' },
+      { type: 'fix', text: '장시간 변환 중 Python 백엔드가 강제 종료되던 race 차단 — 변환 진행 중에는 15초 HWP 연결 polling 일시 정지 (800문항 같은 대규모 작업에서 30분 넘게 걸려도 안전)' },
+      { type: 'fix', text: '채팅 풀이 응답이 한 블록의 첫 문항만 다루던 결함 해소 — 시스템 프롬프트에 멀티문항 처리 규칙 추가' },
+    ],
+  },
+  {
     version: '2.3.3',
     date: '2026-05-18',
     title: '채팅 컨텍스트 개선 + HWP 화살표 수식 보완',
