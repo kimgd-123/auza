@@ -16,6 +16,45 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: '2.5.0',
+    date: '2026-05-20',
+    title: '정답·풀이 자동 추론 (수학팀 교정용)',
+    highlights: [
+      '일괄 변환 시 각 블록의 정답·풀이를 함께 추론 — 채팅 패널 "📋 정답 검토" 탭에서 일람 확인',
+      '기본 OFF, 설정에서 활성화 — 다른 과목/일반 변환에는 영향 없음',
+      '검토 진행상황(체크박스) 세션 영속화 — 800문항 작업 중 닫고 다시 열어도 유지',
+    ],
+    changes: [
+      { type: 'feat', text: '정답·풀이 자동 추론 — 일괄 변환 시 세그먼트마다 Gemini 추가 호출 1회. 다중 키 풀에 자연 편승해 대용량 작업도 분산 처리' },
+      { type: 'feat', text: '채팅 패널 "📋 정답 검토" 탭 — 답안 모드 ON 시에만 노출. 블록별 문항번호/정답 일람, 풀이 펼침/접힘, 행 클릭 시 에디터로 자동 스크롤' },
+      { type: 'feat', text: 'thinking config 활성화 — gemini-3.1-pro-preview 의 reasoning 을 수학 풀이에 활용 (자동 budget)' },
+      { type: 'feat', text: 'HWP 출력 토글 — "정답·풀이 포함" 옵션. 기본 OFF (검토 UI 전용), ON 시 본문 뒤에 회색 박스로 inline 출력. 풀이 안 LaTeX 도 수식 편집기로 자동 렌더링' },
+      { type: 'feat', text: '체크박스 검토 진행상황 + 답안 모드 설정 세션 영속화 — 앱 재시작/세션 복구 시 자동 복원' },
+      { type: 'fix', text: 'Phase 2B timeout 산정 — 정답·풀이 wave 당 320초 (Python retry envelope 273.5s 상회) 로 batch dynamic timeout 공식 보강' },
+      { type: 'fix', text: '답안 모드 OFF 전환 시 HWP 출력 토글이 hidden 상태로 살아남아 산출물에 정답이 새던 결함 해소 (store/세션 복구 양쪽 invariant 적용)' },
+    ],
+  },
+  {
+    version: '2.4.0',
+    date: '2026-05-19',
+    title: '2단 PDF 자동 캡처 + 다중 Gemini API 키',
+    highlights: [
+      '2단 구성 시험지 PDF를 한 번에 일괄 캡처 — 1페이지에서 1단/2단 영역 한 번만 지정',
+      '여러 Gemini API 키를 등록해 키별 워커 풀로 병렬 호출 (대용량 작업 시 quota 분산)',
+      '429(quota 초과) 자동 처리 — 해당 키 60초 cooldown 후 다른 키로 자동 재시도',
+    ],
+    changes: [
+      { type: 'feat', text: '2단 자동 캡처 모드 — 캡처 드롭다운에 신규 추가. 1페이지에서 1단/2단 영역을 한 번 드래그하면 전체 페이지에 자동 적용' },
+      { type: 'feat', text: '다중 Gemini API 키 — 설정 다이얼로그에서 별칭과 함께 여러 키 등록 가능, 각 키마다 유효성 테스트 버튼 제공' },
+      { type: 'feat', text: '키별 독립 워커 풀 — N개 키 × 8 워커로 동시 호출. AUZA_GEMINI_PARALLEL 환경변수는 키당 워커 수로 재해석' },
+      { type: 'feat', text: '429 자동 cooldown — quota 초과 키는 60초간 풀에서 제외, 같은 task 는 즉시 다른 활성 키로 재시도' },
+      { type: 'fix', text: 'OD boxed_text 재분류를 bg_mean 단일 판정으로 단순화 — tight crop 의 글자 픽셀이 가장자리 strip 에 잡혀 발생하던 false positive 감소' },
+      { type: 'fix', text: 'HWP 수식 화살표(⇒/⇐/⇔ 등) 변환 깨짐 해소 — drarrow/dlarrow 같은 미존재 키워드를 HWP 수식 편집기 실제 키워드(RARROW/LARROW/LRARROW/UPARROW/DOWNARROW/UDARROW)로 정정' },
+      { type: 'fix', text: '장시간 변환 중 Python 백엔드가 강제 종료되던 race 차단 — 변환 진행 중에는 15초 HWP 연결 polling 일시 정지 (800문항 같은 대규모 작업에서 30분 넘게 걸려도 안전)' },
+      { type: 'fix', text: '채팅 풀이 응답이 한 블록의 첫 문항만 다루던 결함 해소 — 시스템 프롬프트에 멀티문항 처리 규칙 추가' },
+    ],
+  },
+  {
     version: '2.3.3',
     date: '2026-05-18',
     title: '채팅 컨텍스트 개선 + HWP 화살표 수식 보완',

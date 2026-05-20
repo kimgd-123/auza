@@ -5,6 +5,30 @@ export interface HwpWritePayload {
   mathMappings: Record<string, string>
 }
 
+// Gemini API 키 항목 (v2.4.0 다중 키)
+export interface ApiKeyEntry {
+  key: string
+  label: string
+  disabled?: boolean
+  // Codex F3: 출처 표시 — 'env' 인 키는 SettingsDialog 에서 read-only (별칭/비활성/삭제 불가)
+  source?: 'env' | 'config'
+}
+
+// 2단 자동 캡처용 정규화 사각형 (페이지 비율 0~1, v2.4.0)
+export interface NormRect {
+  x: number  // 0~1
+  y: number  // 0~1
+  w: number  // 0~1
+  h: number  // 0~1
+}
+
+export interface TwoColumnRegions {
+  col1: NormRect
+  col2: NormRect
+}
+
+export type TwoColumnStep = 'col1' | 'col2' | 'ready'
+
 export interface HwpWriteResult {
   success: boolean
   data: unknown
@@ -19,7 +43,23 @@ export interface ElectronAPI {
   analyzeCapture: (imageBase64: string, options?: { pdfPath?: string; pageNum?: number; captureBboxNorm?: number[] }) => Promise<{ html: string | null; regions: number; error: string | null }>
   detectRegions: (imageBase64: string) => Promise<OdDetectionResult>
   convertRegions: (payload: OdConvertPayload) => Promise<{ html: string | null; regions: number; error: string | null }>
-  convertManyRegions: (payload: { segments: OdConvertPayload[] }) => Promise<{ results: Array<{ html: string; regions: number; error: string | null }>; error: string | null }>
+  // v2.5.0: answerMode 옵션 추가 — 본문 변환 후 세그먼트별 정답·풀이 추론
+  convertManyRegions: (payload: {
+    segments: OdConvertPayload[]
+    answerMode?: boolean
+    answerThinkingBudget?: number
+  }) => Promise<{
+    results: Array<{
+      html: string
+      regions: number
+      error: string | null
+      answer?: string
+      solution?: string
+      answerItems?: AnswerSolutionItem[]
+      answerError?: string
+    }>
+    error: string | null
+  }>
   geminiChat: (payload: { messages: Array<{ role: string; text: string }>; context?: string }) => Promise<{ text: string | null; error: string | null }>
 
   // HWP 연동
@@ -42,9 +82,14 @@ export interface ElectronAPI {
     assets: Record<string, string>
   }) => Promise<{ success: boolean; data: unknown; error: string | null }>
 
-  // Gemini API 키 설정
+  // Gemini API 키 설정 — 단일 키 (하위호환, 첫 활성 키 반환)
   getApiKey: () => Promise<{ key: string; hasKey: boolean }>
   saveApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
+
+  // Gemini API 키 — 다중 키 (v2.4.0)
+  getApiKeys: () => Promise<{ keys: ApiKeyEntry[] }>
+  saveApiKeys: (keys: ApiKeyEntry[]) => Promise<{ success: boolean; error?: string }>
+  testApiKey: (apiKey: string) => Promise<{ ok: boolean; error?: string }>
 
   // 세션 복구 시 PDF allowlist 등록
   allowPdf: (filePath: string) => Promise<{ success: boolean; error?: string; canonicalPath?: string | null }>
@@ -144,12 +189,23 @@ declare global {
   }
 }
 
+// 정답·풀이 추론 결과 (v2.5.0)
+export interface AnswerSolutionItem {
+  questionNo: string  // 문항 번호 (보이는 그대로, 없으면 "")
+  answer: string      // 정답 — 객관식이면 ①②③④⑤, 주관식이면 답
+  solution: string    // 풀이 — 핵심 과정, 수식은 LaTeX $...$
+}
+
 // 에디터 블록
 export interface EditorBlock {
   id: string
   title: string
   content: string // ProseMirror JSON (직렬화)
   createdAt: number
+  // v2.5.0: 정답·풀이 추론 결과 (answerMode=true 변환 시에만 채워짐)
+  // 단일 문제: items 길이 1, 여러 문제: items 여러 개
+  answerItems?: AnswerSolutionItem[]
+  answerError?: string  // 정답·풀이 호출만 실패한 경우 (본문 변환은 성공)
 }
 
 // 채팅 메시지
@@ -179,6 +235,10 @@ export interface SessionData {
   blocks: EditorBlock[]
   pdfPath: string | null
   savedAt: number
+  // v2.5.0: 정답·풀이 추론 모드 영속화 (옛 세션은 미존재 → 기본값 사용)
+  answerModeEnabled?: boolean
+  exportAnswerSolution?: boolean
+  answerReviewChecked?: string[]  // Set 직렬화 → 배열로 저장
 }
 
 // Asset (이미지 ID 참조 시스템)

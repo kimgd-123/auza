@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('capture:convert', payload) as Promise<{ html: string | null; regions: number; error: string | null }>,
 
   // 일괄 캡처 전용 — 여러 세그먼트를 한 번에 변환 (v2.3 Batch Capture)
+  // v2.5.0: answerMode 옵션 — 본문 변환 후 세그먼트별 정답·풀이 추론 호출 추가
   convertManyRegions: (payload: {
     segments: Array<{
       imageBase64: string
@@ -33,9 +34,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       pageNum?: number
       captureBboxNorm?: number[]
     }>
+    answerMode?: boolean
+    answerThinkingBudget?: number
   }) =>
     ipcRenderer.invoke('capture:convertMany', payload) as Promise<{
-      results: Array<{ html: string; regions: number; error: string | null }>
+      results: Array<{
+        html: string
+        regions: number
+        error: string | null
+        answer?: string
+        solution?: string
+        answerItems?: Array<{ questionNo: string; answer: string; solution: string }>
+        answerError?: string
+      }>
       error: string | null
     }>,
 
@@ -78,11 +89,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   allowPdf: (filePath: string) =>
     ipcRenderer.invoke('session:allowPdf', filePath) as Promise<{ success: boolean; error?: string }>,
 
-  // Gemini API 키 설정
+  // Gemini API 키 설정 — 단일 키 (하위호환, 첫 활성 키)
   getApiKey: () =>
     ipcRenderer.invoke('config:getApiKey') as Promise<{ key: string; hasKey: boolean }>,
   saveApiKey: (apiKey: string) =>
     ipcRenderer.invoke('config:saveApiKey', apiKey) as Promise<{ success: boolean; error?: string }>,
+
+  // Gemini API 키 — 다중 키 (v2.4.0)
+  getApiKeys: () =>
+    ipcRenderer.invoke('config:getApiKeys') as Promise<{
+      keys: Array<{ key: string; label: string; disabled?: boolean }>
+    }>,
+  saveApiKeys: (keys: Array<{ key: string; label: string; disabled?: boolean }>) =>
+    ipcRenderer.invoke('config:saveApiKeys', keys) as Promise<{ success: boolean; error?: string }>,
+  testApiKey: (apiKey: string) =>
+    ipcRenderer.invoke('config:testApiKey', apiKey) as Promise<{ ok: boolean; error?: string }>,
 
   // OD 진행 상황 수신
   onOdProgress: (callback: (progress: { step: string; current: number; total: number; detail: string }) => void) => {

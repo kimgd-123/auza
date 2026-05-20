@@ -94,8 +94,15 @@ export function useBatchCapture() {
       updateBatchSegment(seg.id, { status: 'converting' })
     }
 
-    const results: Array<{ seg: typeof segments[0]; html: string } | null> = []
+    const results: Array<{
+      seg: typeof segments[0]
+      html: string
+      answerItems?: Array<{ questionNo: string; answer: string; solution: string }>
+      answerError?: string
+    } | null> = []
     try {
+      // v2.5.0: answerMode 가 켜져 있으면 정답·풀이 추론 호출도 함께 요청
+      const answerMode = useAppStore.getState().answerModeEnabled
       const payload = {
         segments: segments.map((seg) => ({
           imageBase64: seg.captureBase64!,
@@ -104,6 +111,7 @@ export function useBatchCapture() {
           pageNum: seg.pageNum,
           captureBboxNorm: seg.bboxNorm,
         })),
+        answerMode,
       }
       const res = await window.electronAPI.convertManyRegions(payload)
       const manyResults = res.results || []
@@ -117,7 +125,12 @@ export function useBatchCapture() {
             // 부분 성공: HTML은 있지만 일부 영역 실패 → 비차단 경고
             console.warn(`[batch-capture] seg ${seg.id} 부분 오류:`, r.error)
           }
-          results.push({ seg, html: r.html })
+          results.push({
+            seg,
+            html: r.html,
+            answerItems: r.answerItems,
+            answerError: r.answerError,
+          })
         } else {
           const errMsg = (r && r.error) || res.error || '변환 실패'
           updateBatchSegment(seg.id, { status: 'error', error: errMsg })
@@ -147,7 +160,7 @@ export function useBatchCapture() {
     const store = useAppStore.getState()
     for (const r of results) {
       if (!r) continue
-      const { seg, html } = r
+      const { seg, html, answerItems, answerError } = r
 
       // 블록 생성
       store.addBlock()
@@ -156,7 +169,13 @@ export function useBatchCapture() {
       if (!newBlock) continue
 
       const title = `캡처 p.${seg.pageNum + 1}`
-      store.updateBlock(newBlock.id, { title })
+      // v2.5.0: answerItems / answerError 를 블록에 부착 (정답 검토 탭에서 사용)
+      // Codex F1: 답안 모드로 호출이 시도된 흔적(answerItems 또는 answerError)이 있으면
+      //   빈 배열이라도 부착해 검토 탭에서 누락되지 않도록 보장.
+      const updates: { title: string; answerItems?: typeof answerItems; answerError?: string } = { title }
+      if (answerItems !== undefined) updates.answerItems = answerItems  // [] 도 부착
+      if (answerError) updates.answerError = answerError
+      store.updateBlock(newBlock.id, updates)
       store.setActiveBlockId(newBlock.id)
 
       // Asset 등록 (캡처 이미지)

@@ -93,7 +93,12 @@ function stripCodeFences(text: string): string {
 }
 
 export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
-  const { captureLoading, setCaptureLoading, setCaptureError, odEnabled, setOdEnabled, odReviewEnabled, setOdReviewEnabled, batchMode, batchCaptureState } = useAppStore()
+  const {
+    captureLoading, setCaptureLoading, setCaptureError,
+    odEnabled, setOdEnabled, odReviewEnabled, setOdReviewEnabled,
+    batchMode, batchCaptureState,
+    twoColumnMode, twoColumnRegions, twoColumnStep, setTwoColumnRegion,
+  } = useAppStore()
   const { addCapture, startBatchMode } = useBatchCapture()
   const overlayRef = useRef<HTMLDivElement>(null)
   const [dragRect, setDragRect] = useState<DragRect | null>(null)
@@ -112,6 +117,14 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
       if (!odEnabled) setOdEnabled(true)
     }
   }, [batchMode, imgCropMode, odEnabled, setOdEnabled])
+
+  // v2.4.0: 2단 자동 캡처 모드 정규화 — IMG OFF, OD ON 강제 (batch와 동일 이유)
+  useEffect(() => {
+    if (twoColumnMode) {
+      if (imgCropMode) setImgCropMode(false)
+      if (!odEnabled) setOdEnabled(true)
+    }
+  }, [twoColumnMode, imgCropMode, odEnabled, setOdEnabled])
 
   // v2.1 OD Review Step
   const [pendingReview, setPendingReview] = useState<PendingOdReview | null>(null)
@@ -375,9 +388,10 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
 
     if (w < 10 || h < 10) return
 
-    // 일괄 캡처 모드에서는 블록 선택 불필요 (변환 시 자동 생성)
+    // 일괄/2단 자동 캡처 모드는 블록 선택 불필요 (변환 시 자동 생성 또는 좌표 저장만)
+    // Codex F1: twoColumnMode 가드 추가 — 블록 없이 영역 좌표만 받는 경로 보호
     const targetBlockId = useAppStore.getState().activeBlockId
-    if (!batchMode && !targetBlockId) {
+    if (!batchMode && !twoColumnMode && !targetBlockId) {
       setCaptureError('먼저 에디터 블록을 선택하거나 추가해주세요.')
       return
     }
@@ -432,6 +446,24 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
       (x + w) / canvasW,
       (y + h) / canvasH,
     ]
+
+    // v2.4.0: 2단 자동 캡처 모드 — 캡처/변환 없이 영역 좌표만 store 에 저장
+    // batchMode 분기보다 우선 처리 (모드 진입 직후의 드래그도 안전하게 흡수)
+    if (twoColumnMode) {
+      // canvas 좌표 → 페이지 비율(0~1) 정규화. PDF 페이지 크기가 페이지마다 달라도
+      // 동일 비율을 모든 페이지에 적용해 안전하게 매핑됨.
+      const canvasW = pageCanvas.clientWidth
+      const canvasH = pageCanvas.clientHeight
+      const normRect = {
+        x: Math.max(0, Math.min(1, x / canvasW)),
+        y: Math.max(0, Math.min(1, y / canvasH)),
+        w: Math.max(0, Math.min(1, w / canvasW)),
+        h: Math.max(0, Math.min(1, h / canvasH)),
+      }
+      const which: 'col1' | 'col2' = twoColumnStep === 'col2' ? 'col2' : 'col1'
+      setTwoColumnRegion(which, normRect)
+      return
+    }
 
     // 일괄 캡처 모드 우선 분기 — IMG/OD 로컬 state가 아직 정규화되지 않은
     // 전환 시점의 드래그에서도 batch 큐로 바로 진입시키기 위해 최우선으로 처리
@@ -734,6 +766,42 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
         </>
       )}
 
+      {/* v2.4.0: 2단 자동 캡처 — 이미 지정된 col1/col2 영역 시각화 (percent 좌표) */}
+      {twoColumnMode && twoColumnRegions?.col1 && twoColumnRegions.col1.w > 0 && (
+        <div
+          className="absolute pointer-events-none"
+          style={{
+            left: `${twoColumnRegions.col1.x * 100}%`,
+            top: `${twoColumnRegions.col1.y * 100}%`,
+            width: `${twoColumnRegions.col1.w * 100}%`,
+            height: `${twoColumnRegions.col1.h * 100}%`,
+            border: '2px solid #2563eb',
+            background: 'rgba(37, 99, 235, 0.08)',
+          }}
+        >
+          <span className="absolute -top-5 left-0 text-[11px] font-semibold text-blue-700 bg-white/90 px-1.5 py-0.5 rounded">
+            1단
+          </span>
+        </div>
+      )}
+      {twoColumnMode && twoColumnRegions?.col2 && twoColumnRegions.col2.w > 0 && (
+        <div
+          className="absolute pointer-events-none"
+          style={{
+            left: `${twoColumnRegions.col2.x * 100}%`,
+            top: `${twoColumnRegions.col2.y * 100}%`,
+            width: `${twoColumnRegions.col2.w * 100}%`,
+            height: `${twoColumnRegions.col2.h * 100}%`,
+            border: '2px solid #16a34a',
+            background: 'rgba(22, 163, 74, 0.08)',
+          }}
+        >
+          <span className="absolute -top-5 left-0 text-[11px] font-semibold text-green-700 bg-white/90 px-1.5 py-0.5 rounded">
+            2단
+          </span>
+        </div>
+      )}
+
       {/* F4: 드래그 중 선택 영역 가이드 박스 */}
       {selectionStyle && (
         <>
@@ -804,9 +872,21 @@ export default function AreaCapture({ pageCanvas, scale, pdfData }: Props) {
       {/* 캡처 모드 안내 배지 */}
       {!isDraggingRef.current && !captureLoading && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none">
-          <div className={`text-white text-xs px-3 py-1 rounded-full shadow ${imgCropMode ? 'bg-green-500/90' : 'bg-orange-500/90'}`}>
-            {imgCropMode ? '드래그하여 이미지를 크롭하세요' : '드래그하여 캡처 영역을 선택하세요'}
-          </div>
+          {twoColumnMode ? (
+            <div className={`text-white text-xs px-3 py-1 rounded-full shadow ${
+              twoColumnStep === 'col1' ? 'bg-blue-600/90' :
+              twoColumnStep === 'col2' ? 'bg-green-600/90' :
+              'bg-gray-700/90'
+            }`}>
+              {twoColumnStep === 'col1' && '① 1단 영역을 드래그하세요 (페이지 왼쪽)'}
+              {twoColumnStep === 'col2' && '② 2단 영역을 드래그하세요 (페이지 오른쪽)'}
+              {twoColumnStep === 'ready' && '두 영역이 설정되었습니다 — 가이드 패널에서 실행'}
+            </div>
+          ) : (
+            <div className={`text-white text-xs px-3 py-1 rounded-full shadow ${imgCropMode ? 'bg-green-500/90' : 'bg-orange-500/90'}`}>
+              {imgCropMode ? '드래그하여 이미지를 크롭하세요' : '드래그하여 캡처 영역을 선택하세요'}
+            </div>
+          )}
         </div>
       )}
 

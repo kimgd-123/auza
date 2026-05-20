@@ -429,12 +429,13 @@ class TestB9_DisablePriority(unittest.TestCase):
 class TestB10_NormalWorkerCount(unittest.TestCase):
     """AUZA_GEMINI_PARALLEL 정상값 테스트"""
 
-    def test_default_is_4(self):
+    def test_default_is_8(self):
+        # v2.3.0~ 기본 워커 8 (유료 티어 최적화)
         env = dict(os.environ)
         env.pop("AUZA_GEMINI_PARALLEL_DISABLE", None)
         env.pop("AUZA_GEMINI_PARALLEL", None)
         with patch.dict(os.environ, env, clear=True):
-            self.assertEqual(_get_parallel_workers(), 4)
+            self.assertEqual(_get_parallel_workers(), 8)
 
     def test_explicit_4(self):
         with patch.dict(os.environ, {"AUZA_GEMINI_PARALLEL": "4"}, clear=False):
@@ -465,9 +466,9 @@ class TestB10_NormalWorkerCount(unittest.TestCase):
 # ═══════════════════════════════════════════════
 
 class TestB11_InvalidWorkerCount(unittest.TestCase):
-    """비정상 환경변수 값 → 안전한 기본값(4)"""
+    """비정상 환경변수 값 → 안전한 기본값(8) (v2.3.0~)"""
 
-    def _test_with_value(self, value, expected=4):
+    def _test_with_value(self, value, expected=8):
         env = dict(os.environ)
         env.pop("AUZA_GEMINI_PARALLEL_DISABLE", None)
         env["AUZA_GEMINI_PARALLEL"] = value

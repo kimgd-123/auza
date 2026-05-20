@@ -361,11 +361,20 @@ def crop_region_from_image(pil_img, box_px: list, padding: int = 5) -> bytes:
 
 
 def reclassify_boxed_text(pil_img, detections: list) -> list:
-    """text 영역 중 글상자(테두리 또는 배경색 차이)가 감지되면 boxed_text로 재분류
+    """text 영역 중 글상자(회색/컬러 배경)가 감지되면 boxed_text 로 재분류.
 
-    감지 방법 (OR 조건):
-    1. 가장자리 edge 밀도: crop의 상하좌우 가장자리에 직선이 3변 이상 존재
-    2. 배경색 차이: crop 내부 평균 밝기가 페이지 배경(255 근처)보다 현저히 어두움
+    감지 방법 (v2.3.4~): **배경색 증거 단일 판정**.
+    - Otsu 이진화로 글자 픽셀을 배제한 후 배경 픽셀 평균(bg_mean) 측정.
+    - `bg_mean < 240` 이면 boxed_text 로 승격.
+
+    edge 밀도(가장자리 strip 의 Canny edge 비율) 는 tight crop 에서 글자 픽셀이
+    strip 에 잡혀 false positive 를 유발하므로 판정에는 사용하지 않고 디버그
+    로그에만 `edge_sides=N` 으로 표기한다.
+
+    Trade-off: 흰 배경 + 얇은 검정 테두리 박스는 bg_mean 기준으로 승격되지 않아
+    자동 boxed 분류 대상에서 제외 (recall 손실). 사용자 PDF 회귀 셋(한국사/국어)
+    에 해당 케이스가 없어 이 phase 에서 수용. 필요 시 별도 phase 에서 직선
+    continuity 기반 edge 휴리스틱 추가.
     """
     try:
         import cv2
@@ -410,11 +419,10 @@ def reclassify_boxed_text(pil_img, detections: list) -> list:
         is_boxed = False
         reason = ""
 
-        # ── 방법 1: 가장자리 edge 밀도 체크 ──
-        strip = max(5, min(crop_h, crop_w) // 20)  # 가장자리 strip 두께
+        # ── 단계 1: 가장자리 edge 증거 수집 ──
+        strip = max(5, min(crop_h, crop_w) // 20)
         edges = cv2.Canny(gray, 30, 100)
 
-        # 상/하/좌/우 가장자리 strip에서 edge 비율 계산
         top_strip = edges[:strip, :]
         bot_strip = edges[-strip:, :]
         left_strip = edges[:, :strip]
@@ -423,25 +431,45 @@ def reclassify_boxed_text(pil_img, detections: list) -> list:
         def edge_ratio(strip_img):
             return np.count_nonzero(strip_img) / max(strip_img.size, 1)
 
-        edge_threshold = 0.15  # 15% 이상 edge가 있으면 테두리 선으로 판단
-        sides_with_border = sum(1 for s in [top_strip, bot_strip, left_strip, right_strip]
-                                if edge_ratio(s) > edge_threshold)
+        edge_threshold = 0.15
+        sides_with_border = sum(
+            1 for s in [top_strip, bot_strip, left_strip, right_strip]
+            if edge_ratio(s) > edge_threshold
+        )
 
-        if sides_with_border >= 3:
+        # ── 단계 2: 배경색 증거 수집 (Otsu 이진화로 글자 픽셀 배제) ──
+        # bg_mean 은 None 이면 측정 불가(crop 너무 작음).
+        bg_mean = None
+        margin = max(strip + 2, 10)
+        if crop_h > margin * 2 and crop_w > margin * 2:
+            inner = gray[margin:-margin, margin:-margin]
+            try:
+                _, thresh = cv2.threshold(
+                    inner, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+                )
+                bg_pixels = inner[thresh == 255]
+                if bg_pixels.size > 0:
+                    bg_mean = float(np.mean(bg_pixels))
+                else:
+                    # Otsu 가 모든 픽셀을 전경으로 분리 (매우 어두운 crop)
+                    bg_mean = float(np.mean(inner))
+            except cv2.error:
+                bg_mean = float(np.mean(inner))
+
+        # ── 단계 3: 배경 증거만으로 판정 ──
+        # v2.3.4 (Codex F1+F2 recheck): edge 휴리스틱은 tight crop 의 글자 픽셀이
+        # Canny 로 strip 에 잡혀 false positive 가 잦음. edge+weak-bg 결합도
+        # off-white 종이(244) 회귀 발생 → edge 경로 자체 폐기. 배경색 증거만 사용.
+        # 진짜 회색/컬러 박스(bg<240)는 단독 분류, 흰 배경 + 얇은 테두리 박스는
+        # 자동 분류 대상 외 (사용자 PDF 회귀 셋에 없음 — recall 손실 trade-off 수용).
+        BG_THRESHOLD = 240
+        edge_summary = sides_with_border  # 디버그 용도만 (강제 분류 안 함)
+
+        if bg_mean is not None and bg_mean < BG_THRESHOLD:
             is_boxed = True
-            reason = f"edge 감지 ({sides_with_border}변)"
-
-        # ── 방법 2: 배경색 차이 ──
-        if not is_boxed:
-            # crop 내부 중앙 영역의 평균 밝기
-            margin = max(strip + 2, 10)
-            if crop_h > margin * 2 and crop_w > margin * 2:
-                inner = gray[margin:-margin, margin:-margin]
-                inner_mean = np.mean(inner)
-                # 페이지 배경은 보통 250+ (흰색), 글상자 배경은 220 이하 (회색)
-                if inner_mean < 235:
-                    is_boxed = True
-                    reason = f"배경색 차이 (밝기={inner_mean:.0f})"
+            reason = (
+                f"배경 차이 (bg={bg_mean:.0f}<{BG_THRESHOLD}, edge_sides={edge_summary})"
+            )
 
         if is_boxed:
             det["region"] = "boxed_text"

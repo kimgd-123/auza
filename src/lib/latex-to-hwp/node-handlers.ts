@@ -77,12 +77,13 @@ export const NODE_HANDLERS: Record<string, NodeHandler> = {
     }
     if (family === 'rel') {
       if (SYMBOL_MAP[text]) return ' ' + SYMBOL_MAP[text] + ' '
-      if (text === '→') return ' rarrow '
-      if (text === '←') return ' larrow '
-      if (text === '↔') return ' lrarrow '
-      if (text === '⇒') return ' drarrow '
-      if (text === '⇐') return ' dlarrow '
-      if (text === '⇔') return ' dlrarrow '
+      // HWP 수식 편집기 키워드 (v2.4.0 핫픽스) — drarrow/dlarrow/lrarrow 는 미존재 키워드
+      if (text === '→') return ' RARROW '
+      if (text === '←') return ' LARROW '
+      if (text === '↔') return ' LRARROW '
+      if (text === '⇒') return ' RARROW '
+      if (text === '⇐') return ' LARROW '
+      if (text === '⇔') return ' LRARROW '
       if (text === '≤') return ' leq '
       if (text === '≥') return ' geq '
       if (text === '≠') return ' neq '
@@ -129,12 +130,13 @@ export const NODE_HANDLERS: Record<string, NodeHandler> = {
   rel: (node) => {
     const text = node.text || ''
     if (SYMBOL_MAP[text]) return ' ' + SYMBOL_MAP[text] + ' '
-    if (text === '→') return ' rarrow '
-    if (text === '←') return ' larrow '
-    if (text === '↔') return ' lrarrow '
-    if (text === '⇒') return ' drarrow '
-    if (text === '⇐') return ' dlarrow '
-    if (text === '⇔') return ' dlrarrow '
+    // HWP 수식 편집기 키워드 (v2.4.0 핫픽스)
+    if (text === '→') return ' RARROW '
+    if (text === '←') return ' LARROW '
+    if (text === '↔') return ' LRARROW '
+    if (text === '⇒') return ' RARROW '
+    if (text === '⇐') return ' LARROW '
+    if (text === '⇔') return ' LRARROW '
     return ' ' + text + ' '
   },
 

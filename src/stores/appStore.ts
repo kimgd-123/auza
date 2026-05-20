@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ChatMessage, EditorBlock, PanelSizes, SavedOdData, BatchCaptureState, BatchCaptureSegment } from '@/types'
+import type { ChatMessage, EditorBlock, PanelSizes, SavedOdData, BatchCaptureState, BatchCaptureSegment, TwoColumnRegions, TwoColumnStep } from '@/types'
 import type { LayoutMode } from '@/components/layout/LayoutPicker'
 
 interface AppState {
@@ -51,6 +51,17 @@ interface AppState {
   odReviewEnabled: boolean
   setOdReviewEnabled: (enabled: boolean) => void
 
+  // 정답·풀이 추론 모드 (v2.5.0)
+  answerModeEnabled: boolean
+  setAnswerModeEnabled: (enabled: boolean) => void
+  // HWP/PPT 출력 시 정답·풀이 포함 여부 (기본 OFF — 검토 UI 전용, 산출물엔 미포함)
+  exportAnswerSolution: boolean
+  setExportAnswerSolution: (enabled: boolean) => void
+  // 정답 검토 체크박스 진행상황 (블록 id 집합)
+  answerReviewChecked: Set<string>
+  toggleAnswerReviewChecked: (blockId: string) => void
+  clearAnswerReviewChecked: () => void
+
   // OD 결과 저장 (블록별 재편집용)
   savedOdData: Record<string, SavedOdData>
   saveOdData: (blockId: string, data: SavedOdData) => void
@@ -98,6 +109,17 @@ interface AppState {
   // 캡처 모드 (개별/일괄)
   batchMode: boolean
   setBatchMode: (batch: boolean) => void
+
+  // 2단 자동 캡처 모드 (v2.4.0)
+  twoColumnMode: boolean
+  twoColumnRegions: TwoColumnRegions | null
+  twoColumnStep: TwoColumnStep
+  twoColumnRunning: boolean
+  setTwoColumnMode: (enabled: boolean) => void
+  setTwoColumnRegion: (which: 'col1' | 'col2', rect: import('@/types').NormRect) => void
+  setTwoColumnStep: (step: TwoColumnStep) => void
+  setTwoColumnRunning: (running: boolean) => void
+  resetTwoColumn: () => void
 
   // 릴리즈 노트 모달 (단일 source of truth)
   releaseNotesOpen: boolean
@@ -157,6 +179,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       nextCollapsed.delete(id)
       const { [id]: _p, ...remainingPending } = state.pendingBlockHtml
       const { [id]: _od, ...remainingOdData } = state.savedOdData
+      const nextAnswerChecked = new Set(state.answerReviewChecked)
+      nextAnswerChecked.delete(id)
       // Asset Store 정리 (별도 store이므로 side-effect로 호출)
       import('@/stores/assetStore').then(({ useAssetStore }) => {
         useAssetStore.getState().removeAssetsByBlock(id)
@@ -169,6 +193,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         collapsedBlockIds: nextCollapsed,
         pendingBlockHtml: remainingPending,
         savedOdData: remainingOdData,
+        answerReviewChecked: nextAnswerChecked,
         reReviewBlockId: state.reReviewBlockId === id ? null : state.reReviewBlockId,
       }
     }),
@@ -225,6 +250,29 @@ export const useAppStore = create<AppState>((set, get) => ({
   setOdEnabled: (enabled) => set({ odEnabled: enabled }),
   odReviewEnabled: true,
   setOdReviewEnabled: (enabled) => set({ odReviewEnabled: enabled }),
+
+  // 정답·풀이 추론 모드 (v2.5.0) — 기본 OFF (수학팀 교정 시에만 ON)
+  answerModeEnabled: false,
+  // Codex F4: 답안 모드 OFF 로 전환 시 exportAnswerSolution 도 자동 false 로 reset.
+  //   이유: SettingsDialog 의 출력 토글 UI 는 answerModeEnabled=true 일 때만 노출되는데,
+  //   값만 살아남아 export-hwp 가 HWP 출력에 답안을 계속 append 하는 hidden side-effect
+  //   가 발생하기 때문. 사용자가 다시 답안 모드를 켤 때는 토글이 OFF 부터 시작.
+  setAnswerModeEnabled: (enabled) =>
+    set(() => (enabled
+      ? { answerModeEnabled: true }
+      : { answerModeEnabled: false, exportAnswerSolution: false }
+    )),
+  exportAnswerSolution: false,
+  setExportAnswerSolution: (enabled) => set({ exportAnswerSolution: enabled }),
+  answerReviewChecked: new Set<string>(),
+  toggleAnswerReviewChecked: (blockId) =>
+    set((state) => {
+      const next = new Set(state.answerReviewChecked)
+      if (next.has(blockId)) next.delete(blockId)
+      else next.add(blockId)
+      return { answerReviewChecked: next }
+    }),
+  clearAnswerReviewChecked: () => set({ answerReviewChecked: new Set<string>() }),
 
   // OD 결과 저장
   savedOdData: {},
@@ -344,6 +392,42 @@ export const useAppStore = create<AppState>((set, get) => ({
   // 캡처 모드 (기본: 일괄)
   batchMode: true,
   setBatchMode: (batch) => set({ batchMode: batch }),
+
+  // 2단 자동 캡처 모드 (v2.4.0)
+  twoColumnMode: false,
+  twoColumnRegions: null,
+  twoColumnStep: 'col1',
+  twoColumnRunning: false,
+  setTwoColumnMode: (enabled) =>
+    set((state) =>
+      enabled
+        ? {
+            twoColumnMode: true,
+            // 모드 진입 시 일괄/개별 캡처와 상호 배타
+            batchMode: false,
+            // 가이드 1단계부터 다시 시작
+            twoColumnStep: 'col1',
+            twoColumnRegions: null,
+          }
+        : { twoColumnMode: false, twoColumnRunning: false },
+    ),
+  setTwoColumnRegion: (which, rect) =>
+    set((state) => {
+      const prev = state.twoColumnRegions
+      const next: TwoColumnRegions = {
+        col1: which === 'col1' ? rect : (prev?.col1 || { x: 0, y: 0, w: 0, h: 0 }),
+        col2: which === 'col2' ? rect : (prev?.col2 || { x: 0, y: 0, w: 0, h: 0 }),
+      }
+      // col1 입력 후 col2 단계로 자동 이동, col2 입력 후 ready
+      let nextStep: TwoColumnStep = state.twoColumnStep
+      if (which === 'col1' && state.twoColumnStep === 'col1') nextStep = 'col2'
+      else if (which === 'col2' && state.twoColumnStep === 'col2') nextStep = 'ready'
+      return { twoColumnRegions: next, twoColumnStep: nextStep }
+    }),
+  setTwoColumnStep: (step) => set({ twoColumnStep: step }),
+  setTwoColumnRunning: (running) => set({ twoColumnRunning: running }),
+  resetTwoColumn: () =>
+    set({ twoColumnRegions: null, twoColumnStep: 'col1', twoColumnRunning: false }),
 
   // 릴리즈 노트 모달
   releaseNotesOpen: false,

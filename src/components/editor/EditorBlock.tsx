@@ -63,6 +63,7 @@ export default function EditorBlock({ block, index, collapsed, onToggleCollapse,
   return (
     <div
       ref={blockRef}
+      data-block-id={block.id}
       className={`border rounded-lg transition-all ${
         isActive ? 'border-blue-400 shadow-sm' : 'border-gray-200 hover:border-gray-300'
       }`}

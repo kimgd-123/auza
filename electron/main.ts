@@ -213,25 +213,102 @@ ipcMain.handle('file:readPdf', async (_event, filePath: string) => {
   }
 })
 
-// Gemini API 키 로딩: .env.local → %APPDATA%/AUZA-v2/config.json
-async function loadGeminiApiKey(): Promise<string | null> {
-  // 1. .env.local
+// Gemini API 키 항목 (v2.4.0 다중 키)
+// Codex F3: source 필드로 .env.local 출처와 config.json 출처를 구분.
+//   - 'env'  : .env.local 에서 읽음 — UI 에서 read-only (별칭/비활성/삭제 불가).
+//              비활성/삭제하려면 .env.local 을 직접 편집.
+//   - 'config': %APPDATA%/AUZA-v2/config.json 에서 읽음 — UI 에서 자유롭게 편집 가능.
+interface ApiKeyEntry {
+  key: string
+  label: string
+  disabled?: boolean
+  source?: 'env' | 'config'
+}
+
+// .env.local 파싱 — GEMINI_API_KEY=single, GEMINI_API_KEYS=comma,separated 둘 다 지원
+async function loadEnvLocalKeys(): Promise<string[]> {
   try {
     const envPath = path.join(app.getAppPath(), '.env.local')
     const envContent = await fs.readFile(envPath, 'utf-8')
-    const match = envContent.match(/^GEMINI_API_KEY=(.+)$/m)
-    if (match?.[1]?.trim()) return match[1].trim()
-  } catch { /* not found */ }
+    const keys: string[] = []
+    const multi = envContent.match(/^GEMINI_API_KEYS=(.+)$/m)
+    if (multi?.[1]) {
+      for (const part of multi[1].split(',')) {
+        const trimmed = part.trim()
+        if (trimmed) keys.push(trimmed)
+      }
+    }
+    const single = envContent.match(/^GEMINI_API_KEY=(.+)$/m)
+    if (single?.[1]?.trim() && !keys.includes(single[1].trim())) {
+      keys.push(single[1].trim())
+    }
+    return keys
+  } catch { return [] }
+}
 
-  // 2. %APPDATA%/AUZA-v2/config.json
-  try {
-    const configPath = path.join(app.getPath('appData'), 'AUZA-v2', 'config.json')
-    const configContent = await fs.readFile(configPath, 'utf-8')
-    const config = JSON.parse(configContent)
-    if (config.geminiApiKey) return config.geminiApiKey
-  } catch { /* not found */ }
+// %APPDATA%/AUZA-v2/config.json 에서 키 항목 로드 + 마이그레이션
+// geminiApiKey (string) 만 있는 경우 → geminiApiKeys[0] 으로 자동 이주
+async function loadConfigKeyEntries(): Promise<ApiKeyEntry[]> {
+  const config = await readConfigRaw()
+  const rawKeys = config.geminiApiKeys
+  if (Array.isArray(rawKeys)) {
+    return rawKeys
+      .filter((e): e is Record<string, unknown> => typeof e === 'object' && e !== null)
+      .map((e) => ({
+        key: String(e.key ?? '').trim(),
+        label: String(e.label ?? '키').trim() || '키',
+        disabled: e.disabled === true,
+      }))
+      .filter((e) => e.key)
+  }
+  // 하위호환: 단일 키만 있는 구버전 config
+  if (typeof config.geminiApiKey === 'string' && config.geminiApiKey.trim()) {
+    return [{ key: config.geminiApiKey.trim(), label: '기본 키', disabled: false }]
+  }
+  return []
+}
 
-  return null
+// 모든 키 항목(활성+비활성 포함, .env.local 우선) — 설정 UI 용
+// Codex F3: 출처 source 표기 추가. env/config 충돌 시 env 우선 + config 메타 무시 (env 는 always-on).
+// v2.4.0: 자동 라벨은 통합 인덱스로 "키 N" (출처는 UI 배지로만 구분 — 사용자 피드백).
+async function loadAllApiKeyEntries(): Promise<ApiKeyEntry[]> {
+  const envKeys = await loadEnvLocalKeys()
+  const envEntries: ApiKeyEntry[] = envKeys.map((k, idx) => ({
+    key: k,
+    label: `키 ${idx + 1}`,
+    disabled: false,
+    source: 'env',
+  }))
+  const configEntries = await loadConfigKeyEntries()
+  // .env.local 키가 우선, 중복 제거
+  const seen = new Set(envEntries.map((e) => e.key))
+  let nextIdx = envEntries.length
+  for (const e of configEntries) {
+    if (!seen.has(e.key)) {
+      // config 항목에 기존 사용자 라벨이 있으면 보존, 없거나 자동 생성된 기본값이면 통합 인덱스로 재라벨
+      const isAutoLabel = !e.label || e.label === '키' || e.label === '기본 키'
+      envEntries.push({
+        ...e,
+        label: isAutoLabel ? `키 ${nextIdx + 1}` : e.label,
+        source: 'config',
+      })
+      seen.add(e.key)
+      nextIdx += 1
+    }
+  }
+  return envEntries
+}
+
+// 활성 키만 (Gemini 호출용)
+async function loadGeminiApiKeys(): Promise<string[]> {
+  const entries = await loadAllApiKeyEntries()
+  return entries.filter((e) => !e.disabled && e.key).map((e) => e.key)
+}
+
+// 단일 키 fallback (하위호환) — 첫 활성 키
+async function loadGeminiApiKey(): Promise<string | null> {
+  const keys = await loadGeminiApiKeys()
+  return keys[0] ?? null
 }
 
 // IPC: Gemini Vision — 이미지를 Gemini에 전송하여 구조화된 콘텐츠 인식
@@ -300,6 +377,21 @@ ipcMain.handle(
         '  • [이미지] alt — base64 등 인라인 이미지의 placeholder',
         '  • ![alt](url) — 외부 URL 또는 일반 markdown 이미지',
         '- 사용자가 "이 내용"이라고 하면 선택된 블록 전체를 참조하세요.',
+        '',
+        '## ⚠️ 멀티문항 처리 규칙 (v2.4.0 추가)',
+        '한 블록 안에 **여러 문항**이 포함되어 있을 수 있습니다. 문항은 일반적으로',
+        '`**1.**`, `**2.**`, `1.`, `2.` 같이 번호로 시작하는 단락으로 나타납니다.',
+        '- 사용자가 "정답", "풀이", "해설" 등을 요청하면 **블록당 한 번이 아니라 블록 안의 모든 번호 매겨진 문항 각각**에 대해 응답하세요.',
+        '- 문항 라벨은 **원본 본문의 번호**(예: 1, 2, 3)를 그대로 사용하세요. 블록 순서나 인덱스가 아닙니다.',
+        '- 어떤 문항도 누락하지 마세요. 한 블록에 1번/2번이 같이 있다면 [문제 1], [문제 2] 모두 응답합니다.',
+        '- 형식 예시:',
+        '  `[문제 1]`',
+        '  `정답: ①`',
+        '  `풀이: ...`',
+        '  ---',
+        '  `[문제 2]`',
+        '  `정답: ②`',
+        '  `풀이: ...`',
       ]
       if (payload.context) {
         systemParts.push(`\n---\n${payload.context}`)
@@ -531,7 +623,9 @@ ipcMain.handle('capture:convert', async (_event, payload: {
   }
 })
 
-// IPC: 일괄 캡처 전용 — 여러 세그먼트를 한 번에 변환 (Python 내부 단일 Pool 병렬화)
+// IPC: 일괄 캡처 전용 — 여러 세그먼트를 한 번에 변환 (Python 내부 다중 키 Pool 병렬화)
+// v2.4.0: 다중 Gemini 키 지원 — activeKeys × workersPerKey 워커로 분산 호출 + 429 cooldown
+// v2.5.0: answerMode 옵션 — 본문 변환 후 세그먼트별 정답·풀이 추론 호출 추가
 ipcMain.handle('capture:convertMany', async (_event, payload: {
   segments: Array<{
     imageBase64: string
@@ -540,10 +634,12 @@ ipcMain.handle('capture:convertMany', async (_event, payload: {
     pageNum?: number
     captureBboxNorm?: number[]
   }>
+  answerMode?: boolean
+  answerThinkingBudget?: number
 }) => {
   try {
-    const apiKey = await loadGeminiApiKey()
-    if (!apiKey) {
+    const apiKeys = await loadGeminiApiKeys()
+    if (apiKeys.length === 0) {
       return { results: [], error: 'Gemini API 키가 설정되지 않았습니다.' }
     }
     const segments = Array.isArray(payload?.segments) ? payload.segments : []
@@ -581,10 +677,19 @@ ipcMain.handle('capture:convertMany', async (_event, payload: {
     }
     const totalTasks = segments.reduce((sum, s) => sum + countTasks(s), 0)
 
+    // v2.4.0: effectiveWorkers = activeKeys × workersPerKey
+    //   - workersPerKey: AUZA_GEMINI_PARALLEL (기본 8, 1~10), DISABLE=1 이면 1
+    //   - activeKeys: 설정된 다중 키 수 (N×8 까지 병렬 가능)
     const parallelDisabled = (process.env.AUZA_GEMINI_PARALLEL_DISABLE || '').trim() === '1'
     const workersRaw = parseInt(process.env.AUZA_GEMINI_PARALLEL || '8', 10)
-    const configuredWorkers = Number.isFinite(workersRaw) && workersRaw >= 1 && workersRaw <= 10 ? workersRaw : 8
-    const effectiveWorkers = parallelDisabled ? 1 : configuredWorkers
+    const workersPerKey = parallelDisabled
+      ? 1
+      : (Number.isFinite(workersRaw) && workersRaw >= 1 && workersRaw <= 10 ? workersRaw : 8)
+    // Codex F4: DISABLE=1 일 때 Python convert_regions_many 는 _get_parallel_workers()=0 로
+    // 완전 순차 실행하므로, Electron 도 effectiveWorkers=1 로 강제해 timeout 공식 정합 유지.
+    const effectiveWorkers = parallelDisabled
+      ? 1
+      : Math.max(1, apiKeys.length * workersPerKey)
     const waves = Math.ceil(totalTasks / effectiveWorkers)
 
     const BASE_TIMEOUT = 5 * 60 * 1000           // 5분 base (IPC + Python 초기화 + 여유)
@@ -592,23 +697,55 @@ ipcMain.handle('capture:convertMany', async (_event, payload: {
     const MAX_TIMEOUT = 60 * 60 * 1000           // 60분 절대 상한
     const taskBasedTimeout = BASE_TIMEOUT + waves * PER_WAVE_TIMEOUT
     const legacyFloor = 3 * 60 * 1000 + segments.length * 2 * 60 * 1000
-    const timeout = Math.min(Math.max(taskBasedTimeout, legacyFloor), MAX_TIMEOUT)
+
+    // v2.5.0: answerMode=true 면 세그먼트당 추가 호출 1회(전체 이미지 + thinking config)
+    //   세그먼트 수만큼 추가 wave (이미지 1장 = task 1개) 로 계산.
+    //   Codex F3: wave 당 worst-case = call_gemini_answer_solution timeout(90s) × 재시도 3회
+    //     + backoff(0.5+1+2=3.5s) ≈ 273.5s. 안전 마진 + thinking config 추가 지연 고려
+    //     → 320s 로 상향. Python vision_client._RETRYABLE_STATUS_CODES + backoff_delays 와
+    //        gemini_vision._DEFAULT_ANSWER_THINKING_BUDGET 의 timeout=90 가 변경되면 함께 갱신.
+    const answerMode = !!payload?.answerMode
+    let answerTimeout = 0
+    if (answerMode) {
+      const ANSWER_PER_WAVE_TIMEOUT = 320 * 1000
+      const answerWaves = Math.ceil(segments.length / effectiveWorkers)
+      answerTimeout = answerWaves * ANSWER_PER_WAVE_TIMEOUT
+    }
+    const timeout = Math.min(
+      Math.max(taskBasedTimeout + answerTimeout, legacyFloor + answerTimeout),
+      MAX_TIMEOUT,
+    )
 
     console.log(`[capture:convertMany] segments=${segments.length} totalTasks=${totalTasks} ` +
+                `keys=${apiKeys.length} workersPerKey=${workersPerKey} ` +
                 `effectiveWorkers=${effectiveWorkers} (parallelDisabled=${parallelDisabled}) ` +
-                `waves=${waves} timeout=${Math.round(timeout / 1000)}s ` +
+                `waves=${waves} answerMode=${answerMode} answerTimeout=${Math.round(answerTimeout / 1000)}s ` +
+                `timeout=${Math.round(timeout / 1000)}s ` +
                 `(taskBased=${Math.round(taskBasedTimeout / 1000)}s, legacyFloor=${Math.round(legacyFloor / 1000)}s)`)
 
     const result = await sendPythonCommand('od_convert_many', {
       segments: normalizedSegments,
-      apiKey,
+      apiKeys,                  // v2.4.0: 다중 키 풀
+      apiKey: apiKeys[0],       // 하위호환: 단일 키만 받던 Python 버전 대응
+      answerMode,               // v2.5.0: 정답·풀이 추론 모드
+      answerThinkingBudget: typeof payload?.answerThinkingBudget === 'number'
+        ? payload.answerThinkingBudget
+        : -1,
     }, timeout)
 
     if (!result.success || !result.data) {
       return { results: [], error: result.error || '일괄 변환에 실패했습니다.' }
     }
     const data = result.data as {
-      results: Array<{ html: string; regions: number; error: string | null }>
+      results: Array<{
+        html: string
+        regions: number
+        error: string | null
+        answer?: string
+        solution?: string
+        answerItems?: Array<{ questionNo: string; answer: string; solution: string }>
+        answerError?: string
+      }>
       error: string | null
     }
     return {
@@ -795,13 +932,105 @@ ipcMain.handle('config:getApiKey', async () => {
 })
 
 ipcMain.handle('config:saveApiKey', async (_event, apiKey: string) => {
+  // 하위호환: 단일 키 저장 → geminiApiKeys 배열의 첫 항목으로 흡수
+  // 기존 다른 키들은 보존
   try {
     await updateConfig((config) => {
-      config.geminiApiKey = apiKey.trim()
+      const trimmed = apiKey.trim()
+      const existing = Array.isArray(config.geminiApiKeys)
+        ? (config.geminiApiKeys as Array<Record<string, unknown>>)
+        : []
+      const others = existing
+        .map((e) => ({
+          key: String(e.key ?? '').trim(),
+          label: String(e.label ?? '키').trim() || '키',
+          disabled: e.disabled === true,
+        }))
+        .filter((e) => e.key && e.key !== trimmed)
+      const merged: ApiKeyEntry[] = trimmed
+        ? [{ key: trimmed, label: '기본 키', disabled: false }, ...others]
+        : others
+      config.geminiApiKeys = merged
+      // 구 필드 제거 (마이그레이션)
+      delete config.geminiApiKey
     })
     return { success: true }
   } catch (err) {
     return { success: false, error: (err as Error).message }
+  }
+})
+
+// ── 다중 키 IPC (v2.4.0) ──
+
+ipcMain.handle('config:getApiKeys', async () => {
+  try {
+    const keys = await loadAllApiKeyEntries()
+    return { keys }
+  } catch {
+    return { keys: [] as ApiKeyEntry[] }
+  }
+})
+
+ipcMain.handle('config:saveApiKeys', async (_event, keys: unknown) => {
+  try {
+    if (!Array.isArray(keys)) {
+      return { success: false, error: '키 목록이 배열이 아닙니다' }
+    }
+    // Codex F3: env 출처 키는 config 에 저장하지 않음 — .env.local 만 출처로 인정.
+    // (UI 가 source 필드를 보내지 않거나 잘못 보낸 경우도 같은 정책으로 안전하게 처리)
+    const envKeySet = new Set(await loadEnvLocalKeys())
+    const sanitized: ApiKeyEntry[] = []
+    const seen = new Set<string>()
+    for (const raw of keys) {
+      if (!raw || typeof raw !== 'object') continue
+      const e = raw as Record<string, unknown>
+      const key = String(e.key ?? '').trim()
+      if (!key || seen.has(key)) continue
+      if (envKeySet.has(key)) continue  // env 키는 config 출처가 아님
+      seen.add(key)
+      sanitized.push({
+        key,
+        label: String(e.label ?? '키').trim() || '키',
+        disabled: e.disabled === true,
+        // source 는 저장 시점에 'config' 고정 — 다시 읽을 때 loadAllApiKeyEntries 가 'config' 부여
+      })
+    }
+    await updateConfig((config) => {
+      config.geminiApiKeys = sanitized
+      // 구 필드 제거 (마이그레이션)
+      delete config.geminiApiKey
+    })
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: (err as Error).message }
+  }
+})
+
+// 키 유효성 ping — Gemini list-models 호출로 401/유효 확인 (1회, 짧은 타임아웃)
+ipcMain.handle('config:testApiKey', async (_event, apiKey: unknown) => {
+  const key = typeof apiKey === 'string' ? apiKey.trim() : ''
+  if (!key) return { ok: false, error: '키가 비어있습니다' }
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 8000)
+    try {
+      // models.list 는 비용/quota 거의 없음 — 단순 인증 검증용
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`,
+        { signal: controller.signal },
+      )
+      if (res.status === 200) return { ok: true }
+      if (res.status === 400 || res.status === 401 || res.status === 403) {
+        return { ok: false, error: `인증 실패 (HTTP ${res.status})` }
+      }
+      return { ok: false, error: `예상치 못한 응답 (HTTP ${res.status})` }
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch (err) {
+    const msg = (err as Error).message
+    if (msg.includes('abort')) return { ok: false, error: '응답 시간 초과 (8초)' }
+    return { ok: false, error: msg }
   }
 })
 

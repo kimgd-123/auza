@@ -9,9 +9,21 @@ export default function StatusBar() {
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // 주기적 HWP 연결 상태 폴링
+  // v2.4.0 핫픽스: 변환/캡처 등 무거운 Python IPC 진행 중엔 polling skip.
+  // Why: Python 백엔드는 단일 stdin 큐 구조라 od_convert_many(수십 분) 같은 장기 작업 중엔
+  //   check_hwp 가 큐에서 대기 → polling timeout → v2.3.2 자동 복구가 Python child 를
+  //   강제 종료 → 진행 중이던 변환도 함께 사망. 변환 중엔 HWP 상태를 즉시 알 필요 없음.
+  // 작업 종료 후 다음 15초에 자동 polling 복귀.
   useEffect(() => {
     const poll = async () => {
       if (!window.electronAPI?.checkHwp) return
+      const state = useAppStore.getState()
+      const busy =
+        state.batchCaptureState?.status === 'converting' ||
+        state.captureLoading ||
+        state.hwpExporting ||
+        state.twoColumnRunning
+      if (busy) return
       try {
         const result = await window.electronAPI.checkHwp()
         setHwpConnected(result.connected)
