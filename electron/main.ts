@@ -625,6 +625,7 @@ ipcMain.handle('capture:convert', async (_event, payload: {
 
 // IPC: 일괄 캡처 전용 — 여러 세그먼트를 한 번에 변환 (Python 내부 다중 키 Pool 병렬화)
 // v2.4.0: 다중 Gemini 키 지원 — activeKeys × workersPerKey 워커로 분산 호출 + 429 cooldown
+// v2.5.0: answerMode 옵션 — 본문 변환 후 세그먼트별 정답·풀이 추론 호출 추가
 ipcMain.handle('capture:convertMany', async (_event, payload: {
   segments: Array<{
     imageBase64: string
@@ -633,6 +634,8 @@ ipcMain.handle('capture:convertMany', async (_event, payload: {
     pageNum?: number
     captureBboxNorm?: number[]
   }>
+  answerMode?: boolean
+  answerThinkingBudget?: number
 }) => {
   try {
     const apiKeys = await loadGeminiApiKeys()
@@ -694,25 +697,55 @@ ipcMain.handle('capture:convertMany', async (_event, payload: {
     const MAX_TIMEOUT = 60 * 60 * 1000           // 60분 절대 상한
     const taskBasedTimeout = BASE_TIMEOUT + waves * PER_WAVE_TIMEOUT
     const legacyFloor = 3 * 60 * 1000 + segments.length * 2 * 60 * 1000
-    const timeout = Math.min(Math.max(taskBasedTimeout, legacyFloor), MAX_TIMEOUT)
+
+    // v2.5.0: answerMode=true 면 세그먼트당 추가 호출 1회(전체 이미지 + thinking config)
+    //   세그먼트 수만큼 추가 wave (이미지 1장 = task 1개) 로 계산.
+    //   Codex F3: wave 당 worst-case = call_gemini_answer_solution timeout(90s) × 재시도 3회
+    //     + backoff(0.5+1+2=3.5s) ≈ 273.5s. 안전 마진 + thinking config 추가 지연 고려
+    //     → 320s 로 상향. Python vision_client._RETRYABLE_STATUS_CODES + backoff_delays 와
+    //        gemini_vision._DEFAULT_ANSWER_THINKING_BUDGET 의 timeout=90 가 변경되면 함께 갱신.
+    const answerMode = !!payload?.answerMode
+    let answerTimeout = 0
+    if (answerMode) {
+      const ANSWER_PER_WAVE_TIMEOUT = 320 * 1000
+      const answerWaves = Math.ceil(segments.length / effectiveWorkers)
+      answerTimeout = answerWaves * ANSWER_PER_WAVE_TIMEOUT
+    }
+    const timeout = Math.min(
+      Math.max(taskBasedTimeout + answerTimeout, legacyFloor + answerTimeout),
+      MAX_TIMEOUT,
+    )
 
     console.log(`[capture:convertMany] segments=${segments.length} totalTasks=${totalTasks} ` +
                 `keys=${apiKeys.length} workersPerKey=${workersPerKey} ` +
                 `effectiveWorkers=${effectiveWorkers} (parallelDisabled=${parallelDisabled}) ` +
-                `waves=${waves} timeout=${Math.round(timeout / 1000)}s ` +
+                `waves=${waves} answerMode=${answerMode} answerTimeout=${Math.round(answerTimeout / 1000)}s ` +
+                `timeout=${Math.round(timeout / 1000)}s ` +
                 `(taskBased=${Math.round(taskBasedTimeout / 1000)}s, legacyFloor=${Math.round(legacyFloor / 1000)}s)`)
 
     const result = await sendPythonCommand('od_convert_many', {
       segments: normalizedSegments,
       apiKeys,                  // v2.4.0: 다중 키 풀
       apiKey: apiKeys[0],       // 하위호환: 단일 키만 받던 Python 버전 대응
+      answerMode,               // v2.5.0: 정답·풀이 추론 모드
+      answerThinkingBudget: typeof payload?.answerThinkingBudget === 'number'
+        ? payload.answerThinkingBudget
+        : -1,
     }, timeout)
 
     if (!result.success || !result.data) {
       return { results: [], error: result.error || '일괄 변환에 실패했습니다.' }
     }
     const data = result.data as {
-      results: Array<{ html: string; regions: number; error: string | null }>
+      results: Array<{
+        html: string
+        regions: number
+        error: string | null
+        answer?: string
+        solution?: string
+        answerItems?: Array<{ questionNo: string; answer: string; solution: string }>
+        answerError?: string
+      }>
       error: string | null
     }
     return {

@@ -239,11 +239,19 @@ def handle_command(command: str, payload: dict) -> dict:
     elif command == 'od_convert_many':
         # 일괄 캡처 전용 — 여러 세그먼트의 Gemini 호출을 키별 풀로 병렬 처리
         # v2.4.0: apiKeys 다중 키 풀 우선, 없으면 apiKey 단일 키 fallback
+        # v2.5.0: answerMode=True 시 세그먼트별 정답·풀이 추론 호출 추가
         from od.analyzer import convert_regions_many
 
         segments = payload.get('segments', [])
         api_keys_raw = payload.get('apiKeys')
         single_key = payload.get('apiKey', '')
+        answer_mode = bool(payload.get('answerMode', False))
+        # thinking_budget: -1=자동 (기본), 0=비활성, 양수=토큰 한도
+        thinking_raw = payload.get('answerThinkingBudget', -1)
+        try:
+            answer_thinking_budget = int(thinking_raw)
+        except (TypeError, ValueError):
+            answer_thinking_budget = -1
 
         if isinstance(api_keys_raw, list):
             api_keys = [str(k).strip() for k in api_keys_raw if isinstance(k, str) and str(k).strip()]
@@ -257,7 +265,11 @@ def handle_command(command: str, payload: dict) -> dict:
         if not api_keys:
             return {"error": "apiKey 또는 apiKeys가 필요합니다"}
 
-        return convert_regions_many(segments, api_keys)
+        return convert_regions_many(
+            segments, api_keys,
+            answer_mode=answer_mode,
+            answer_thinking_budget=answer_thinking_budget,
+        )
 
     else:
         return {"error": f"Unknown command: {command}"}

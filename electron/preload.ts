@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('capture:convert', payload) as Promise<{ html: string | null; regions: number; error: string | null }>,
 
   // 일괄 캡처 전용 — 여러 세그먼트를 한 번에 변환 (v2.3 Batch Capture)
+  // v2.5.0: answerMode 옵션 — 본문 변환 후 세그먼트별 정답·풀이 추론 호출 추가
   convertManyRegions: (payload: {
     segments: Array<{
       imageBase64: string
@@ -33,9 +34,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       pageNum?: number
       captureBboxNorm?: number[]
     }>
+    answerMode?: boolean
+    answerThinkingBudget?: number
   }) =>
     ipcRenderer.invoke('capture:convertMany', payload) as Promise<{
-      results: Array<{ html: string; regions: number; error: string | null }>
+      results: Array<{
+        html: string
+        regions: number
+        error: string | null
+        answer?: string
+        solution?: string
+        answerItems?: Array<{ questionNo: string; answer: string; solution: string }>
+        answerError?: string
+      }>
       error: string | null
     }>,
 

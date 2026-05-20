@@ -20,7 +20,12 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .constants import MIN_OD_SIZE
 from .detector import detect_regions_from_image, crop_region_from_image, sort_regions_reading_order, reclassify_boxed_text
-from .gemini_vision import call_gemini_vision, get_prompt_for_region, PROMPT_FIGURE_CHECK
+from .gemini_vision import (
+    call_gemini_vision,
+    call_gemini_answer_solution,
+    get_prompt_for_region,
+    PROMPT_FIGURE_CHECK,
+)
 
 
 # ── 다중 Gemini API 키 풀 (v2.4.0) ──
@@ -113,6 +118,41 @@ def _call_vision_with_pool(key_pool: KeyPool, crop_b64: str, prompt: str) -> str
             raise
         except GeminiPermanentError:
             # 400/401 은 키 자체 문제 → 다른 키로 재시도해도 의미 없음. 그대로 raise.
+            raise
+
+
+def _call_answer_solution_with_pool(key_pool: KeyPool, image_b64: str,
+                                     thinking_budget: int = -1) -> dict:
+    """KeyPool 라운드로빈으로 정답·풀이 추론 호출 (v2.5.0).
+
+    Returns: call_gemini_answer_solution 의 반환 dict (실패 시 {"items": []}).
+    KeyPool / 429 처리는 _call_vision_with_pool 와 동일.
+    """
+    from .vision_client import GeminiRetryExhaustedError, GeminiPermanentError
+
+    tried = set()
+    last_error = None
+    while True:
+        key = key_pool.acquire(exclude=tried)
+        if key is None:
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError("사용 가능한 API 키가 없습니다 (모두 cooldown)")
+        try:
+            return call_gemini_answer_solution(key, image_b64,
+                                                thinking_budget=thinking_budget)
+        except GeminiRetryExhaustedError as e:
+            if getattr(e, 'status_code', 0) == 429:
+                key_pool.mark_cooldown(key)
+                tried.add(key)
+                last_error = e
+                sys.stderr.write(
+                    f"[od-analyzer] answer key cooldown (429) — 활성 키 "
+                    f"{key_pool.active_count()}/{key_pool.total_count()} 남음\n"
+                )
+                continue
+            raise
+        except GeminiPermanentError:
             raise
 
 
@@ -465,20 +505,27 @@ def convert_regions(image_base64: str, detections: list, api_key: str,
     }
 
 
-def convert_regions_many(segments: list, api_keys) -> dict:
+def convert_regions_many(segments: list, api_keys,
+                          answer_mode: bool = False,
+                          answer_thinking_budget: int = -1) -> dict:
     """여러 세그먼트를 한 번에 변환 — 모든 세그먼트의 Gemini 호출을
     다중 키 풀(KeyPool) 위 ThreadPoolExecutor에서 병렬 처리.
 
     Args:
         segments: [{imageBase64, detections, pdfPath?, pageNum?, captureBboxNorm?}, ...]
         api_keys: API 키 리스트 (list[str]) 또는 단일 키 (str, 하위호환)
+        answer_mode: True 면 본문 변환 후 세그먼트별 정답·풀이 추론 호출 추가 (v2.5.0)
+        answer_thinking_budget: thinking 토큰 한도 (-1=자동, 0=비활성)
 
     Returns:
-        {"results": [{html, regions, error}, ...], "error": None}
+        {"results": [{html, regions, error, answer?, solution?, answerError?}, ...], "error": None}
         results는 segments와 동일 순서/길이.
+        answer/solution/answerError 필드는 answer_mode=True 일 때만 존재.
 
     v2.4.0: workers = len(api_keys) × _get_parallel_workers().
         키별 라운드로빈 + 429 발생 시 해당 키 60초 cooldown → 같은 task 다른 키 재시도.
+    v2.5.0: answer_mode=True 시 본문 변환 후 Phase 2B에서 세그먼트별로
+        정답·풀이 추론 호출을 같은 KeyPool 위에서 병렬 실행.
     """
     from PIL import Image
 
@@ -736,6 +783,120 @@ def convert_regions_many(segments: list, api_keys) -> dict:
             "regions": total,
             "error": "; ".join(errors) if errors else None,
         })
+
+    # ────────────────────────────────────────────
+    # Phase 2B: 정답·풀이 추론 (v2.5.0, answer_mode=True 시)
+    # 세그먼트별 전체 이미지를 같은 KeyPool 위 ThreadPoolExecutor 로 병렬 호출.
+    # 본문 변환에 실패한(state.error 또는 모든 region 실패) 세그먼트는 skip.
+    # ────────────────────────────────────────────
+    if answer_mode:
+        # 호출 대상: 본문 변환에 실패하지 않은 세그먼트 + 이미지가 있는 세그먼트
+        answer_targets = []  # [(seg_idx, image_b64)]
+        for seg_idx, state in enumerate(seg_states):
+            if state["error"] or state["img"] is None:
+                continue
+            seg = segments[seg_idx]
+            img_b64 = seg.get('imageBase64', '')
+            if not img_b64:
+                continue
+            answer_targets.append((seg_idx, img_b64))
+
+        total_answer = len(answer_targets)
+        if total_answer > 0:
+            sys.stderr.write(
+                f"[od-analyzer] convert_many: 정답·풀이 추론 시작 — "
+                f"{total_answer}/{seg_count} 세그먼트 (thinking_budget={answer_thinking_budget})\n"
+            )
+
+            # 진행률: Phase 2A 끝났으니 새 카운터로 시작
+            answer_progress_lock = threading.Lock()
+            answer_progress = [0]
+
+            def _tick_answer(seg_idx: int, ok: bool):
+                with answer_progress_lock:
+                    answer_progress[0] += 1
+                    cur = answer_progress[0]
+                _emit_progress(
+                    "answer", current=cur, total=total_answer,
+                    detail=f"[{seg_idx+1}/{seg_count}] 정답·풀이 {'완료' if ok else '실패'}",
+                    segment_index=seg_idx, segment_total=seg_count,
+                )
+
+            answer_results = {}  # seg_idx -> {"items": [...]} or {"error": str}
+            use_answer_parallel = workers_per_key > 0 and total_answer > 1
+
+            if use_answer_parallel:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    fut_map = {}
+                    for seg_idx, img_b64 in answer_targets:
+                        fut = executor.submit(
+                            _call_answer_solution_with_pool,
+                            key_pool, img_b64, answer_thinking_budget,
+                        )
+                        fut_map[fut] = seg_idx
+                    for fut in as_completed(fut_map):
+                        seg_idx = fut_map[fut]
+                        try:
+                            answer_results[seg_idx] = fut.result()
+                            _tick_answer(seg_idx, True)
+                        except Exception as e:
+                            sys.stderr.write(f"[od-analyzer] seg{seg_idx} answer 실패: {e}\n")
+                            answer_results[seg_idx] = {"error": str(e)}
+                            _tick_answer(seg_idx, False)
+            else:
+                for seg_idx, img_b64 in answer_targets:
+                    try:
+                        answer_results[seg_idx] = _call_answer_solution_with_pool(
+                            key_pool, img_b64, answer_thinking_budget,
+                        )
+                        _tick_answer(seg_idx, True)
+                    except Exception as e:
+                        sys.stderr.write(f"[od-analyzer] seg{seg_idx} answer 실패: {e}\n")
+                        answer_results[seg_idx] = {"error": str(e)}
+                        _tick_answer(seg_idx, False)
+
+            # 세그먼트 결과에 answer/solution 부착
+            # Codex F1: items=[] 빈 응답도 "추론 실패" 로 명시 부착해 검토 탭에서 누락 방지
+            EMPTY_ANSWER_ERROR = "정답·풀이 추론 결과가 비어있습니다 (모델 미응답 또는 파싱 실패)"
+            for seg_idx in range(seg_count):
+                ans = answer_results.get(seg_idx)
+                if ans is None:
+                    # answer_mode 인데 호출 skip (본문 실패 등) — 빈 값 부착
+                    results[seg_idx]["answer"] = ""
+                    results[seg_idx]["solution"] = ""
+                    results[seg_idx]["answerItems"] = []
+                    continue
+                if "error" in ans:
+                    results[seg_idx]["answer"] = ""
+                    results[seg_idx]["solution"] = ""
+                    results[seg_idx]["answerItems"] = []
+                    results[seg_idx]["answerError"] = ans["error"]
+                    continue
+                items = ans.get("items", [])
+                results[seg_idx]["answerItems"] = items
+                # 단일 문제: items[0] 의 answer/solution 을 평탄화
+                # 여러 문제: 첫 답을 answer 로, 모든 풀이를 합쳐서 solution 으로
+                if len(items) == 1:
+                    results[seg_idx]["answer"] = items[0].get("answer", "")
+                    results[seg_idx]["solution"] = items[0].get("solution", "")
+                elif len(items) > 1:
+                    answers_joined = "; ".join(
+                        (f"{it.get('questionNo','').strip()}. " if it.get('questionNo','').strip() else "")
+                        + it.get("answer", "")
+                        for it in items if it.get("answer")
+                    )
+                    solutions_joined = "\n\n".join(
+                        (f"[{it.get('questionNo','').strip()}] " if it.get('questionNo','').strip() else "")
+                        + it.get("solution", "")
+                        for it in items if it.get("solution")
+                    )
+                    results[seg_idx]["answer"] = answers_joined
+                    results[seg_idx]["solution"] = solutions_joined
+                else:
+                    # Codex F1: 호출은 성공했으나 items=[] — answerError 로 승격
+                    results[seg_idx]["answer"] = ""
+                    results[seg_idx]["solution"] = ""
+                    results[seg_idx]["answerError"] = EMPTY_ANSWER_ERROR
 
     _emit_progress("done", current=total_gemini, total=max(total_gemini, 1),
                    detail=f"일괄 변환 완료 ({seg_count}건)")

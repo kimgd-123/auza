@@ -27,13 +27,24 @@ class VisionClient(abc.ABC):
     """Vision API 클라이언트 인터페이스"""
 
     @abc.abstractmethod
-    def call_vision(self, image_b64: str, prompt: str, timeout: float = 60) -> VisionResult:
+    def call_vision(
+        self,
+        image_b64: str,
+        prompt: str,
+        timeout: float = 60,
+        json_mode: bool = False,
+        response_schema: Optional[dict] = None,
+        thinking_budget: Optional[int] = None,
+    ) -> VisionResult:
         """이미지 + 프롬프트 → 텍스트 결과 반환
 
         Args:
             image_b64: base64 인코딩된 PNG 이미지
             prompt: 분석 프롬프트
             timeout: 요청 타임아웃 (초)
+            json_mode: True 면 response_mime_type='application/json' 적용
+            response_schema: json_mode=True 시 응답 스키마 (SDK 호환 dict)
+            thinking_budget: None=비활성, 0=비활성, -1=자동, >0=토큰 한도
 
         Returns:
             VisionResult
@@ -94,12 +105,42 @@ class GeminiDirectClient(VisionClient):
             self._clients[self._api_key] = client
             return client
 
-    def call_vision(self, image_b64: str, prompt: str, timeout: float = 60) -> VisionResult:
-        """Gemini Vision API 호출 (재시도 포함)"""
+    def call_vision(
+        self,
+        image_b64: str,
+        prompt: str,
+        timeout: float = 60,
+        json_mode: bool = False,
+        response_schema: Optional[dict] = None,
+        thinking_budget: Optional[int] = None,
+    ) -> VisionResult:
+        """Gemini Vision API 호출 (재시도 포함)
+
+        v2.5.0: json_mode / thinking_budget 옵션 추가 (정답·풀이 추론용).
+        """
         from google.genai import types
 
         client = self._get_client()
         image_bytes = base64.b64decode(image_b64)
+
+        # ── GenerateContentConfig 파라미터 빌드 ──
+        config_kwargs = {
+            'http_options': types.HttpOptions(timeout=int(timeout * 1000)),
+        }
+        if json_mode:
+            config_kwargs['response_mime_type'] = 'application/json'
+            if response_schema is not None:
+                config_kwargs['response_schema'] = response_schema
+        if thinking_budget is not None:
+            # SDK 버전이 ThinkingConfig 미지원 시 silent skip (기능 자체는 동작)
+            thinking_cfg_cls = getattr(types, 'ThinkingConfig', None)
+            if thinking_cfg_cls is not None:
+                try:
+                    config_kwargs['thinking_config'] = thinking_cfg_cls(
+                        thinking_budget=int(thinking_budget),
+                    )
+                except Exception:
+                    pass
 
         max_attempts = 3
         backoff_delays = [0.5, 1.0, 2.0]
@@ -118,9 +159,7 @@ class GeminiDirectClient(VisionClient):
                         ),
                         prompt,
                     ],
-                    config=types.GenerateContentConfig(
-                        http_options=types.HttpOptions(timeout=int(timeout * 1000)),
-                    ),
+                    config=types.GenerateContentConfig(**config_kwargs),
                 )
 
                 elapsed_ms = int((time.monotonic() - start_time) * 1000)

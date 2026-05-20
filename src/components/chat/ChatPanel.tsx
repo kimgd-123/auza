@@ -3,8 +3,56 @@ import { useAppStore } from '@/stores/appStore'
 import { buildContext } from '@/lib/context-builder'
 import { generationIrToHtml } from '@/lib/generation-ir-to-html'
 import PresetSelector from './PresetSelector'
+import AnswerReviewPanel from './AnswerReviewPanel'
 import type { ChatMessage } from '@/types'
 import type { Preset, HwpGenerationIR } from '@/types/generation'
+
+/** v2.5.0: 채팅/정답 검토 탭 헤더 (답안 모드 ON 일 때만 노출) */
+function ChatPanelTabHeader({
+  activeTab,
+  onChange,
+  showReviewTab,
+  inline = false,
+}: {
+  activeTab: ChatPanelTab
+  onChange: (tab: ChatPanelTab) => void
+  showReviewTab: boolean
+  /** true 면 기존 채팅 헤더 안에 인라인 배치 (배경 색 통일) */
+  inline?: boolean
+}) {
+  const wrapperClass = inline
+    ? 'flex items-center gap-1'
+    : 'flex items-center gap-1 px-4 py-2 border-b border-gray-200 bg-gray-50 flex-shrink-0'
+  return (
+    <div className={wrapperClass}>
+      <TabButton active={activeTab === 'chat'} onClick={() => onChange('chat')}>
+        💬 채팅
+      </TabButton>
+      {showReviewTab && (
+        <TabButton active={activeTab === 'review'} onClick={() => onChange('review')}>
+          📋 정답 검토
+        </TabButton>
+      )}
+    </div>
+  )
+}
+
+function TabButton({
+  active, onClick, children,
+}: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-2.5 py-1 text-xs rounded transition-colors ${
+        active
+          ? 'bg-white text-blue-600 border border-blue-200 font-medium'
+          : 'text-gray-600 hover:bg-white/60'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
 
 function stripCodeFences(text: string): string {
   let s = text.trim()
@@ -19,12 +67,24 @@ function stripCodeFences(text: string): string {
   return s.trim()
 }
 
+type ChatPanelTab = 'chat' | 'review'
+
 export default function ChatPanel() {
   const { activeBlockId, blocks, chatHistories, addChatMessage, updateBlock } = useAppStore()
+  // v2.5.0: 답안 모드 ON 시 [정답 검토] 탭 노출
+  const answerModeEnabled = useAppStore((s) => s.answerModeEnabled)
+  const [activeTab, setActiveTab] = useState<ChatPanelTab>('chat')
   const [input, setInput] = useState('')
   const [loadingBlockId, setLoadingBlockId] = useState<string | null>(null)
   const loading = loadingBlockId === activeBlockId
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // 답안 모드가 꺼지면 탭을 chat 으로 되돌림 (review 탭이 사라지므로)
+  useEffect(() => {
+    if (!answerModeEnabled && activeTab === 'review') {
+      setActiveTab('chat')
+    }
+  }, [answerModeEnabled, activeTab])
 
   const activeBlock = blocks.find((b) => b.id === activeBlockId)
   const messages = activeBlockId ? (chatHistories[activeBlockId] || []) : []
@@ -251,11 +311,36 @@ export default function ChatPanel() {
     useAppStore.getState().setActiveBlockId(newBlock.id)
   }, [activeBlockId])
 
+  // 답안 모드 ON + review 탭 활성 → AnswerReviewPanel 단독 표시 (헤더 포함)
+  if (answerModeEnabled && activeTab === 'review') {
+    return (
+      <div className="flex flex-col h-full">
+        <ChatPanelTabHeader
+          activeTab={activeTab}
+          onChange={setActiveTab}
+          showReviewTab={answerModeEnabled}
+        />
+        <div className="flex-1 overflow-hidden">
+          <AnswerReviewPanel />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col h-full">
-      {/* 헤더 */}
+      {/* 헤더 — 탭 + 활성 블록 표시 */}
       <div className="flex items-center px-4 py-2 border-b border-gray-200 bg-gray-50 flex-shrink-0">
-        <span className="text-sm font-medium text-gray-700">Gemini 채팅</span>
+        {answerModeEnabled ? (
+          <ChatPanelTabHeader
+            activeTab={activeTab}
+            onChange={setActiveTab}
+            showReviewTab={answerModeEnabled}
+            inline
+          />
+        ) : (
+          <span className="text-sm font-medium text-gray-700">Gemini 채팅</span>
+        )}
         <div className="flex-1" />
         <span className="text-xs text-gray-400">
           {activeBlock ? `블록: ${activeBlock.title || '제목 없음'}` : '블록을 선택하세요'}

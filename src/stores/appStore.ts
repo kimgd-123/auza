@@ -51,6 +51,17 @@ interface AppState {
   odReviewEnabled: boolean
   setOdReviewEnabled: (enabled: boolean) => void
 
+  // 정답·풀이 추론 모드 (v2.5.0)
+  answerModeEnabled: boolean
+  setAnswerModeEnabled: (enabled: boolean) => void
+  // HWP/PPT 출력 시 정답·풀이 포함 여부 (기본 OFF — 검토 UI 전용, 산출물엔 미포함)
+  exportAnswerSolution: boolean
+  setExportAnswerSolution: (enabled: boolean) => void
+  // 정답 검토 체크박스 진행상황 (블록 id 집합)
+  answerReviewChecked: Set<string>
+  toggleAnswerReviewChecked: (blockId: string) => void
+  clearAnswerReviewChecked: () => void
+
   // OD 결과 저장 (블록별 재편집용)
   savedOdData: Record<string, SavedOdData>
   saveOdData: (blockId: string, data: SavedOdData) => void
@@ -168,6 +179,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       nextCollapsed.delete(id)
       const { [id]: _p, ...remainingPending } = state.pendingBlockHtml
       const { [id]: _od, ...remainingOdData } = state.savedOdData
+      const nextAnswerChecked = new Set(state.answerReviewChecked)
+      nextAnswerChecked.delete(id)
       // Asset Store 정리 (별도 store이므로 side-effect로 호출)
       import('@/stores/assetStore').then(({ useAssetStore }) => {
         useAssetStore.getState().removeAssetsByBlock(id)
@@ -180,6 +193,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         collapsedBlockIds: nextCollapsed,
         pendingBlockHtml: remainingPending,
         savedOdData: remainingOdData,
+        answerReviewChecked: nextAnswerChecked,
         reReviewBlockId: state.reReviewBlockId === id ? null : state.reReviewBlockId,
       }
     }),
@@ -236,6 +250,29 @@ export const useAppStore = create<AppState>((set, get) => ({
   setOdEnabled: (enabled) => set({ odEnabled: enabled }),
   odReviewEnabled: true,
   setOdReviewEnabled: (enabled) => set({ odReviewEnabled: enabled }),
+
+  // 정답·풀이 추론 모드 (v2.5.0) — 기본 OFF (수학팀 교정 시에만 ON)
+  answerModeEnabled: false,
+  // Codex F4: 답안 모드 OFF 로 전환 시 exportAnswerSolution 도 자동 false 로 reset.
+  //   이유: SettingsDialog 의 출력 토글 UI 는 answerModeEnabled=true 일 때만 노출되는데,
+  //   값만 살아남아 export-hwp 가 HWP 출력에 답안을 계속 append 하는 hidden side-effect
+  //   가 발생하기 때문. 사용자가 다시 답안 모드를 켤 때는 토글이 OFF 부터 시작.
+  setAnswerModeEnabled: (enabled) =>
+    set(() => (enabled
+      ? { answerModeEnabled: true }
+      : { answerModeEnabled: false, exportAnswerSolution: false }
+    )),
+  exportAnswerSolution: false,
+  setExportAnswerSolution: (enabled) => set({ exportAnswerSolution: enabled }),
+  answerReviewChecked: new Set<string>(),
+  toggleAnswerReviewChecked: (blockId) =>
+    set((state) => {
+      const next = new Set(state.answerReviewChecked)
+      if (next.has(blockId)) next.delete(blockId)
+      else next.add(blockId)
+      return { answerReviewChecked: next }
+    }),
+  clearAnswerReviewChecked: () => set({ answerReviewChecked: new Set<string>() }),
 
   // OD 결과 저장
   savedOdData: {},

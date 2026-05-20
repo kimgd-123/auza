@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useAppStore } from '@/stores/appStore'
 import type { ApiKeyEntry } from '@/types'
 
 interface Props {
@@ -28,6 +29,12 @@ export default function SettingsDialog({ open, onClose }: Props) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
+
+  // v2.5.0: 정답·풀이 추론 모드 토글
+  const answerModeEnabled = useAppStore((s) => s.answerModeEnabled)
+  const setAnswerModeEnabled = useAppStore((s) => s.setAnswerModeEnabled)
+  const exportAnswerSolution = useAppStore((s) => s.exportAnswerSolution)
+  const setExportAnswerSolution = useAppStore((s) => s.setExportAnswerSolution)
 
   useEffect(() => {
     if (!open) return
@@ -246,6 +253,48 @@ export default function SettingsDialog({ open, onClose }: Props) {
 
         {error && <p className="text-xs text-red-600 mt-3">{error}</p>}
         {success && <p className="text-xs text-green-600 mt-3">저장되었습니다.</p>}
+
+        {/* v2.5.0: 정답·풀이 추론 모드 — 수학팀 교정용, 기본 OFF */}
+        <div className="mt-6 border-t border-gray-200 pt-4">
+          <h4 className="text-sm font-semibold text-gray-900 mb-1">
+            정답·풀이 자동 추론 (v2.5.0)
+          </h4>
+          <p className="text-xs text-gray-500 mb-3">
+            수학 교재 교정용. 일괄 변환 시 각 블록의 정답·풀이를 함께 추론해 채팅 패널
+            "📋 정답 검토" 탭에서 일람으로 확인합니다. (다중 키 풀에 자연 편승, 호출당 시간 약간 증가)
+          </p>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={answerModeEnabled}
+              onChange={(e) => setAnswerModeEnabled(e.target.checked)}
+              className="mt-0.5 accent-blue-600"
+            />
+            <div>
+              <div className="text-sm text-gray-800">정답·풀이 추론 활성화</div>
+              <div className="text-xs text-gray-500">
+                일괄 캡처 / 2단 자동 캡처 변환 시 세그먼트마다 추가 호출 1회 발생
+              </div>
+            </div>
+          </label>
+
+          {answerModeEnabled && (
+            <label className="flex items-start gap-2 cursor-pointer mt-3 ml-6">
+              <input
+                type="checkbox"
+                checked={exportAnswerSolution}
+                onChange={(e) => setExportAnswerSolution(e.target.checked)}
+                className="mt-0.5 accent-blue-600"
+              />
+              <div>
+                <div className="text-sm text-gray-800">HWP/PPT 출력에 정답·풀이 포함</div>
+                <div className="text-xs text-gray-500">
+                  기본 OFF — 검토 UI 에만 표시하고 산출물에는 미포함. 워크북/해설집 용도면 ON.
+                </div>
+              </div>
+            </label>
+          )}
+        </div>
 
         <div className="flex items-center justify-between gap-3 mt-6">
           <p className="text-xs text-gray-500">

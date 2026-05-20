@@ -43,7 +43,23 @@ export interface ElectronAPI {
   analyzeCapture: (imageBase64: string, options?: { pdfPath?: string; pageNum?: number; captureBboxNorm?: number[] }) => Promise<{ html: string | null; regions: number; error: string | null }>
   detectRegions: (imageBase64: string) => Promise<OdDetectionResult>
   convertRegions: (payload: OdConvertPayload) => Promise<{ html: string | null; regions: number; error: string | null }>
-  convertManyRegions: (payload: { segments: OdConvertPayload[] }) => Promise<{ results: Array<{ html: string; regions: number; error: string | null }>; error: string | null }>
+  // v2.5.0: answerMode 옵션 추가 — 본문 변환 후 세그먼트별 정답·풀이 추론
+  convertManyRegions: (payload: {
+    segments: OdConvertPayload[]
+    answerMode?: boolean
+    answerThinkingBudget?: number
+  }) => Promise<{
+    results: Array<{
+      html: string
+      regions: number
+      error: string | null
+      answer?: string
+      solution?: string
+      answerItems?: AnswerSolutionItem[]
+      answerError?: string
+    }>
+    error: string | null
+  }>
   geminiChat: (payload: { messages: Array<{ role: string; text: string }>; context?: string }) => Promise<{ text: string | null; error: string | null }>
 
   // HWP 연동
@@ -173,12 +189,23 @@ declare global {
   }
 }
 
+// 정답·풀이 추론 결과 (v2.5.0)
+export interface AnswerSolutionItem {
+  questionNo: string  // 문항 번호 (보이는 그대로, 없으면 "")
+  answer: string      // 정답 — 객관식이면 ①②③④⑤, 주관식이면 답
+  solution: string    // 풀이 — 핵심 과정, 수식은 LaTeX $...$
+}
+
 // 에디터 블록
 export interface EditorBlock {
   id: string
   title: string
   content: string // ProseMirror JSON (직렬화)
   createdAt: number
+  // v2.5.0: 정답·풀이 추론 결과 (answerMode=true 변환 시에만 채워짐)
+  // 단일 문제: items 길이 1, 여러 문제: items 여러 개
+  answerItems?: AnswerSolutionItem[]
+  answerError?: string  // 정답·풀이 호출만 실패한 경우 (본문 변환은 성공)
 }
 
 // 채팅 메시지
@@ -208,6 +235,10 @@ export interface SessionData {
   blocks: EditorBlock[]
   pdfPath: string | null
   savedAt: number
+  // v2.5.0: 정답·풀이 추론 모드 영속화 (옛 세션은 미존재 → 기본값 사용)
+  answerModeEnabled?: boolean
+  exportAnswerSolution?: boolean
+  answerReviewChecked?: string[]  // Set 직렬화 → 배열로 저장
 }
 
 // Asset (이미지 ID 참조 시스템)
