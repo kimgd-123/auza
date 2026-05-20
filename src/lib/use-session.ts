@@ -111,10 +111,13 @@ export function useSessionRecovery() {
     }
 
     // v2.5.0: 답안 모드 + 출력 토글 + 체크박스 진행상황 복구
-    if (typeof pendingSession.answerModeEnabled === 'boolean') {
-      store.setAnswerModeEnabled(pendingSession.answerModeEnabled)
-    }
-    if (typeof pendingSession.exportAnswerSolution === 'boolean') {
+    // Codex F4 v2: store invariant(answerModeEnabled=false → exportAnswerSolution=false)
+    //   를 세션 복구 경로에서도 강제. setAnswerModeEnabled 를 거쳐 답안 모드 먼저 set
+    //   하고, 모드가 ON 일 때만 exportAnswerSolution 을 복구. OFF 면 invariant 에
+    //   의해 자동으로 false 가 된다. F4 v1 에서 두 값을 독립 복구하던 게 결함이었음.
+    const answerOn = pendingSession.answerModeEnabled === true
+    store.setAnswerModeEnabled(answerOn)  // OFF 면 exportAnswerSolution 도 자동 false
+    if (answerOn && typeof pendingSession.exportAnswerSolution === 'boolean') {
       store.setExportAnswerSolution(pendingSession.exportAnswerSolution)
     }
     if (Array.isArray(pendingSession.answerReviewChecked)) {
