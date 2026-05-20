@@ -16,6 +16,25 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: '2.5.0',
+    date: '2026-05-20',
+    title: '정답·풀이 자동 추론 (수학팀 교정용)',
+    highlights: [
+      '일괄 변환 시 각 블록의 정답·풀이를 함께 추론 — 채팅 패널 "📋 정답 검토" 탭에서 일람 확인',
+      '기본 OFF, 설정에서 활성화 — 다른 과목/일반 변환에는 영향 없음',
+      '검토 진행상황(체크박스) 세션 영속화 — 800문항 작업 중 닫고 다시 열어도 유지',
+    ],
+    changes: [
+      { type: 'feat', text: '정답·풀이 자동 추론 — 일괄 변환 시 세그먼트마다 Gemini 추가 호출 1회. 다중 키 풀에 자연 편승해 대용량 작업도 분산 처리' },
+      { type: 'feat', text: '채팅 패널 "📋 정답 검토" 탭 — 답안 모드 ON 시에만 노출. 블록별 문항번호/정답 일람, 풀이 펼침/접힘, 행 클릭 시 에디터로 자동 스크롤' },
+      { type: 'feat', text: 'thinking config 활성화 — gemini-3.1-pro-preview 의 reasoning 을 수학 풀이에 활용 (자동 budget)' },
+      { type: 'feat', text: 'HWP 출력 토글 — "정답·풀이 포함" 옵션. 기본 OFF (검토 UI 전용), ON 시 본문 뒤에 회색 박스로 inline 출력. 풀이 안 LaTeX 도 수식 편집기로 자동 렌더링' },
+      { type: 'feat', text: '체크박스 검토 진행상황 + 답안 모드 설정 세션 영속화 — 앱 재시작/세션 복구 시 자동 복원' },
+      { type: 'fix', text: 'Phase 2B timeout 산정 — 정답·풀이 wave 당 320초 (Python retry envelope 273.5s 상회) 로 batch dynamic timeout 공식 보강' },
+      { type: 'fix', text: '답안 모드 OFF 전환 시 HWP 출력 토글이 hidden 상태로 살아남아 산출물에 정답이 새던 결함 해소 (store/세션 복구 양쪽 invariant 적용)' },
+    ],
+  },
+  {
     version: '2.4.0',
     date: '2026-05-19',
     title: '2단 PDF 자동 캡처 + 다중 Gemini API 키',
